@@ -1,6 +1,5 @@
 using Application.Basket.Commands;
 using Application.Interfaces.Repositories.WriteRepositories;
-using MediatR;
 using UnitTests.Helpers.Fixtures;
 
 namespace UnitTests.Application.Basket;
@@ -56,7 +55,7 @@ public class RemoveBasketItemCommandHandlerTests
     public async Task Handle_WhenUnitOfWorkFails_ReturnsFailure()
     {
         var product = ProductFixtures.CreateProduct();
-        var basket = BasketFixtures.CreateBasketWithItems(items: [BasketFixtures.CreateBasketItem(product.Id)]);
+        var basket = BasketFixtures.CreateBasketWithItems(items: [BasketFixtures.CreateBasketItem(product: product)]);
 
         _basketRepo
             .Setup(r => r.GetBasketWithItemsAsync(basket.BasketId, It.IsAny<CancellationToken>()))
@@ -79,7 +78,7 @@ public class RemoveBasketItemCommandHandlerTests
     public async Task Handle_WhenValid_RemovesItemAndReturnsSuccess()
     {
         var product = ProductFixtures.CreateProduct();
-        var basket = BasketFixtures.CreateBasketWithItems(items: [BasketFixtures.CreateBasketItem(product.Id, quantity: 3)]);
+        var basket = BasketFixtures.CreateBasketWithItems(items: [BasketFixtures.CreateBasketItem(product: product, quantity: 3)]);
 
         _basketRepo
             .Setup(r => r.GetBasketWithItemsAsync(basket.BasketId, It.IsAny<CancellationToken>()))
@@ -91,10 +90,34 @@ public class RemoveBasketItemCommandHandlerTests
             .Setup(u => u.CompleteAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
-        var command = new RemoveBasketItemCommand { BasketId = basket.BasketId, ProductId = product.Id, Quantity = 3 };
+        var command = new RemoveBasketItemCommand { BasketId = basket.BasketId, ProductId = product.Id, Quantity = 1 };
         var result = await _handler.Handle(command, CancellationToken.None);
 
         result.IsSuccess.Should().BeTrue();
-        result.Value.Should().Be(Unit.Value);
+        result.Value.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Handle_WhenLastItemRemoved_DeletesBasket()
+    {
+        var product = ProductFixtures.CreateProduct();
+        var basket = BasketFixtures.CreateBasketWithItems(items: [BasketFixtures.CreateBasketItem(product: product, quantity: 1)]);
+
+        _basketRepo
+            .Setup(r => r.GetBasketWithItemsAsync(basket.BasketId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(basket);
+        _productRepo
+            .Setup(r => r.GetByIdAsync(product.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(product);
+        _unitOfWork
+            .Setup(u => u.CompleteAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        var command = new RemoveBasketItemCommand { BasketId = basket.BasketId, ProductId = product.Id, Quantity = 1 };
+        var result = await _handler.Handle(command, CancellationToken.None);
+
+        result.IsSuccess.Should().BeTrue();
+        result.Value.Should().BeTrue();
+        _basketRepo.Verify(r => r.Remove(basket), Times.Once);
     }
 }

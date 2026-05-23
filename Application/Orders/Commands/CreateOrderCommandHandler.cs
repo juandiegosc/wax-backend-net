@@ -45,6 +45,7 @@ public class CreateOrderCommandHandler(
 
         var subtotal = items.Sum(x => x.Price * x.Quantity);
         var deliveryFee = CalculateDeliveryFee(subtotal);
+        var hasCustomProduct = basket.Items.Any(i => i.Product is CustomProduct);
 
         var order = await orderRepository.GetByPaymentIntentIdAsync(basket.PaymentIntentId, cancellationToken);
 
@@ -54,10 +55,11 @@ public class CreateOrderCommandHandler(
             {
                 BuyerEmail = user.Email ?? string.Empty,
                 BillingAddress = user.BillingAddress!,
-                BillingAddressId =  user.BillingAddressId!,
+                BillingAddressId = user.BillingAddressId!,
                 OrderItems = items,
                 Subtotal = subtotal,
                 DeliveryFee = deliveryFee,
+                OrderStatus = hasCustomProduct ? OrderStatus.CustomOrder : OrderStatus.Pending,
                 PaymentIntentId = basket.PaymentIntentId,
                 PaymentSummary = request.OrderDto.PaymentSummary
             };
