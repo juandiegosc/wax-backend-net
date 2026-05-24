@@ -45,6 +45,28 @@ public class BasketCookieService(IHttpContextAccessor contextAccessor, IWebHostE
 
     public void DeleteBasketId()
     {
-        contextAccessor.HttpContext?.Response.Cookies.Delete(BasketIdCookieName);
+        CookieOptions cookieOptions;
+
+        if (env.IsProduction())
+        {
+            cookieOptions = new CookieOptions
+            {
+                HttpOnly = true,
+                Secure = true,
+                SameSite = SameSiteMode.Lax,
+                Domain = ".waxweb.shop",
+            };
+        }
+        else
+        {
+            cookieOptions = new CookieOptions
+            {
+                HttpOnly = true,
+                Secure = false,
+                SameSite = SameSiteMode.Lax,
+            };
+        }
+
+        contextAccessor.HttpContext?.Response.Cookies.Delete(BasketIdCookieName, cookieOptions);
     }
 }
