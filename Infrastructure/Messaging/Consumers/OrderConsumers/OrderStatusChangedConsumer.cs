@@ -18,7 +18,7 @@ public class OrderStatusChangedConsumer(ReadDbContext readContext, ILogger<Order
 
         if (readModel == null)
         {
-            logger.LogInformation($"Order with id {message.OrderId} not found");
+            logger.LogInformation("Order with id {OrderId} not found", message.OrderId);
             throw new InvalidOperationException("Order read model not found");
         }
             
@@ -28,6 +28,6 @@ public class OrderStatusChangedConsumer(ReadDbContext readContext, ILogger<Order
 
         readContext.Entry(readModel).State = EntityState.Modified;
         await readContext.SaveChangesAsync(context.CancellationToken);
-        logger.LogInformation($"Order with id {message.OrderId} has been updated");
+        logger.LogInformation("Order with id {OrderId} has been updated", message.OrderId);
     }
 }

@@ -1,4 +1,4 @@
-{$PUBLIC_DOMAIN} {
+api.waxweb.shop {
     encode zstd gzip
 
     @signalr path /comments*
@@ -9,4 +9,9 @@
     }
 
     reverse_proxy api:8080
+}
+
+n8n.waxweb.shop {
+    encode zstd gzip
+    reverse_proxy n8n:5678
 }

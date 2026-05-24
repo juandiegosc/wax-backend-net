@@ -142,8 +142,8 @@ public class BasketControllerTests
         RemoveBasketItemCommand? capturedCommand = null;
         _mediator
             .Setup(m => m.Send(It.IsAny<RemoveBasketItemCommand>(), It.IsAny<CancellationToken>()))
-            .Callback<IRequest<Result<Unit>>, CancellationToken>((c, _) => capturedCommand = (RemoveBasketItemCommand)c)
-            .ReturnsAsync(Result<Unit>.Success(Unit.Value));
+            .Callback<IRequest<Result<bool>>, CancellationToken>((c, _) => capturedCommand = (RemoveBasketItemCommand)c)
+            .ReturnsAsync(Result<bool>.Success(false));
 
         await _controller.RemoveItemFromBasket(productId, quantity);
 
@@ -151,5 +151,33 @@ public class BasketControllerTests
         capturedCommand!.BasketId.Should().Be(basketId);
         capturedCommand.ProductId.Should().Be(productId);
         capturedCommand.Quantity.Should().Be(quantity);
+    }
+
+    [Fact]
+    public async Task RemoveItemFromBasket_WhenBasketDeleted_DeletesCookie()
+    {
+        _basketProvider.Setup(p => p.GetBasketId()).Returns("basket-123");
+
+        _mediator
+            .Setup(m => m.Send(It.IsAny<RemoveBasketItemCommand>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<bool>.Success(true));
+
+        await _controller.RemoveItemFromBasket("product-1", 1);
+
+        _basketProvider.Verify(p => p.DeleteBasketId(), Times.Once);
+    }
+
+    [Fact]
+    public async Task RemoveItemFromBasket_WhenBasketNotDeleted_DoesNotDeleteCookie()
+    {
+        _basketProvider.Setup(p => p.GetBasketId()).Returns("basket-123");
+
+        _mediator
+            .Setup(m => m.Send(It.IsAny<RemoveBasketItemCommand>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<bool>.Success(false));
+
+        await _controller.RemoveItemFromBasket("product-1", 1);
+
+        _basketProvider.Verify(p => p.DeleteBasketId(), Times.Never);
     }
 }

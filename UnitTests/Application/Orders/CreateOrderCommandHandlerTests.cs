@@ -181,12 +181,47 @@ public class CreateOrderCommandHandlerTests
         _orderRepo.Verify(r => r.Add(It.IsAny<Order>()), Times.Once);
         capturedOrder.Should().NotBeNull();
         capturedOrder!.BillingAddressId.Should().Be("addr-1");
+        capturedOrder!.OrderStatus.Should().Be(OrderStatus.Pending);
         _eventPublisher.Verify(e => e.PublishEventAsync(
             It.IsAny<OrderCreatedIntegrationEvent>(),
             It.IsAny<CancellationToken>()), Times.Once);
         _eventPublisher.Verify(e => e.PublishEventAsync(
             It.IsAny<ProductStockChangedIntegrationEvent>(),
             It.IsAny<CancellationToken>()), Times.Exactly(basket.Items.Count));
+    }
+
+    [Fact]
+    public async Task Handle_WhenBasketHasCustomProduct_SetsOrderStatusToCustomOrder()
+    {
+        var customProduct = CustomProductFixtures.CreateCustomProduct(status: CustomProductStatus.AddedToBasket);
+        var item = BasketFixtures.CreateBasketItem(quantity: 1, product: customProduct);
+        var basket = BasketFixtures.CreateBasketWithItems(paymentIntentId: "pi_custom", items: [item]);
+
+        _basketRepo
+            .Setup(r => r.GetBasketWithItemsAsync(basket.BasketId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(basket);
+        SetupRegisteredUser();
+        _orderRepo
+            .Setup(r => r.GetByPaymentIntentIdAsync("pi_custom", It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Order?)null);
+        _unitOfWork
+            .Setup(u => u.CompleteAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        Order? capturedOrder = null;
+        _orderRepo
+            .Setup(r => r.Add(It.IsAny<Order>()))
+            .Callback<Order>(order => capturedOrder = order);
+
+        var command = new CreateOrderCommand { BasketId = basket.BasketId, OrderDto = BuildOrderDto() };
+        var result = await _handler.Handle(command, CancellationToken.None);
+
+        result.IsSuccess.Should().BeTrue();
+        capturedOrder.Should().NotBeNull();
+        capturedOrder!.OrderStatus.Should().Be(OrderStatus.CustomOrder);
+        _eventPublisher.Verify(e => e.PublishEventAsync(
+            It.IsAny<ProductStockChangedIntegrationEvent>(),
+            It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]

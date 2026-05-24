@@ -52,7 +52,7 @@ public class PaymentService(IConfiguration configuration, ILogger<PaymentService
         try
         {
             var webHookSecret = configuration["StripeSettings:WebhookSecret"] ?? "";
-            var stripeEvent = EventUtility.ConstructEvent(payload, signature, webHookSecret);
+            var stripeEvent = EventUtility.ConstructEvent(payload, signature, webHookSecret, throwOnApiVersionMismatch: false);
             var (status, intentId, amount) = stripeEvent.Data.Object switch
             {
                 PaymentIntent intent => (intent.Status, intent.Id, intent.Amount),

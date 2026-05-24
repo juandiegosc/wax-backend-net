@@ -44,6 +44,12 @@ public class BasketController(IBasketProvider basketProvider) : BaseApiControlle
     public async Task<ActionResult<Unit>> RemoveItemFromBasket(string productId, int quantity)
     {
         var basketId = basketProvider.GetBasketId() ?? string.Empty;
-        return await HandleCommand(new RemoveBasketItemCommand { ProductId = productId, Quantity = quantity, BasketId = basketId });
+        var result = await HandleCommandWithResult(new RemoveBasketItemCommand { ProductId = productId, Quantity = quantity, BasketId = basketId });
+
+        if (!result.IsSuccess) return BadRequest(result.Error);
+
+        if (result.Value) basketProvider.DeleteBasketId();
+
+        return Ok();
     }
 }

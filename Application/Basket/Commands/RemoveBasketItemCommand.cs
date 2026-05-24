@@ -4,7 +4,7 @@ using MediatR;
 
 namespace Application.Basket.Commands;
 
-public class RemoveBasketItemCommand : IRequest<Result<Unit>>
+public class RemoveBasketItemCommand : IRequest<Result<bool>>
 {
     public required string ProductId { get; set; }
     public required int Quantity { get; set; }
