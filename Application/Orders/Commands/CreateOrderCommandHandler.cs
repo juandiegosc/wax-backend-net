@@ -2,6 +2,7 @@ using System.Text.Json;
 using Application.Core.Validations;
 using Application.IntegrationEvents.OrderEvents;
 using Application.IntegrationEvents.ProductEvents;
+using Application.Basket.Interfaces;
 using Application.Interfaces.Services;
 using Application.Interfaces.Publish;
 using Application.Interfaces.Repositories.WriteRepositories;
@@ -20,7 +21,8 @@ public class CreateOrderCommandHandler(
     IOrderRepository orderRepository,
     IUnitOfWork unitOfWork,
     IUserAccessor userAccessor,
-    IEventPublisher eventPublisher)
+    IEventPublisher eventPublisher,
+    IBasketProvider basketProvider)
     : IRequestHandler<CreateOrderCommand, Result<OrderDto>>
 {
     public async Task<Result<OrderDto>> Handle(CreateOrderCommand request, CancellationToken cancellationToken)
@@ -113,9 +115,11 @@ public class CreateOrderCommandHandler(
 
         var result = await unitOfWork.CompleteAsync(cancellationToken);
 
-        return !result
-            ? Result<OrderDto>.Failure("Failed to create order")
-            : Result<OrderDto>.Success(order.ToDto());
+        if (!result) return Result<OrderDto>.Failure("Failed to create order");
+
+        basketProvider.DeleteBasketId();
+
+        return Result<OrderDto>.Success(order.ToDto());
     }
 
     #region Private Methods

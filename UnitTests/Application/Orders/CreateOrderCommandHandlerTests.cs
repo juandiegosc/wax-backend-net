@@ -1,5 +1,6 @@
 using Application.IntegrationEvents.OrderEvents;
 using Application.IntegrationEvents.ProductEvents;
+using Application.Basket.Interfaces;
 using Application.Interfaces.Services;
 using Application.Interfaces.Publish;
 using Application.Interfaces.Repositories.WriteRepositories;
@@ -21,6 +22,7 @@ public class CreateOrderCommandHandlerTests
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
     private readonly Mock<IUserAccessor> _userAccessor = new();
     private readonly Mock<IEventPublisher> _eventPublisher = new();
+    private readonly Mock<IBasketProvider> _basketProvider = new();
     private readonly CreateOrderCommandHandler _handler;
 
     public CreateOrderCommandHandlerTests()
@@ -30,7 +32,8 @@ public class CreateOrderCommandHandlerTests
             _orderRepo.Object,
             _unitOfWork.Object,
             _userAccessor.Object,
-            _eventPublisher.Object);
+            _eventPublisher.Object,
+            _basketProvider.Object);
 
         _eventPublisher.SetReturnsDefault(Task.CompletedTask);
     }
@@ -297,6 +300,29 @@ public class CreateOrderCommandHandlerTests
 
         result.IsSuccess.Should().BeFalse();
         result.Error.Should().Be("Failed to create order");
+        _basketProvider.Verify(b => b.DeleteBasketId(), Times.Never);
+    }
+
+    [Fact]
+    public async Task Handle_WhenOrderCreatedSuccessfully_DeletesBasketCookie()
+    {
+        var basket = BasketFixtures.CreateBasketWithItems(paymentIntentId: "pi_delete_cookie");
+        _basketRepo
+            .Setup(r => r.GetBasketWithItemsAsync(basket.BasketId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(basket);
+        SetupRegisteredUser();
+        _orderRepo
+            .Setup(r => r.GetByPaymentIntentIdAsync("pi_delete_cookie", It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Order?)null);
+        _unitOfWork
+            .Setup(u => u.CompleteAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        var command = new CreateOrderCommand { BasketId = basket.BasketId, OrderDto = BuildOrderDto() };
+        var result = await _handler.Handle(command, CancellationToken.None);
+
+        result.IsSuccess.Should().BeTrue();
+        _basketProvider.Verify(b => b.DeleteBasketId(), Times.Once);
     }
 
     [Fact]
