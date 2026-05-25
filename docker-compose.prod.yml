@@ -19,9 +19,9 @@ services:
       RabbitMQ__Password: "${RABBITMQ_PASSWORD}"
       Cors__AllowedOrigins__0: "${PUBLIC_FRONTEND_ORIGIN}"
       Cors__AllowedOrigins__1: "${PUBLIC_FRONTEND_ORIGIN_1}"
-      Cors__AllowedOrigins__3: "${PUBLIC_FRONTEND_ORIGIN_2}"
-      Cors__AllowedOrigins__4: "${PUBLIC_FRONTEND_ORIGIN_3}"
-      Cors__AllowedOrigins__5: "${PUBLIC_FRONTEND_ORIGIN_4}"
+      Cors__AllowedOrigins__2: "${PUBLIC_FRONTEND_ORIGIN_2}"
+      Cors__AllowedOrigins__3: "${PUBLIC_FRONTEND_ORIGIN_3}"
+      Cors__AllowedOrigins__4: "${PUBLIC_FRONTEND_ORIGIN_4}"
       Admin__Email: "${ADMIN_EMAIL}"
       Admin__Password: "${ADMIN_PASSWORD}"
       Cloudinary__CloudName: "${CLOUDINARY_CLOUD_NAME}"
@@ -54,6 +54,8 @@ services:
   postgres:
     image: postgres:17-alpine
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:5432:5432"
     environment:
       POSTGRES_USER: "${POSTGRES_USER}"
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
