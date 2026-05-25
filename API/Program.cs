@@ -9,8 +9,11 @@ using Application.Interfaces.Repositories.ReadRepositories;
 using Application.Interfaces.Repositories.WriteRepositories;
 using Application.Interfaces.Services;
 using Application.Product.Commands.Delete;
+using Application.Reports.Queries;
+using Application.Reports.Validators;
 using Domain.Entities;
 using Domain.Enumerators;
+using FluentValidation;
 using Infrastructure.Cookies;
 using Infrastructure.Email;
 using Infrastructure.Email.Adapters;
@@ -143,6 +146,13 @@ builder.Services.AddScoped<IEventPublisher, EventPublisher>();
 
 builder.Services.AddScoped<IProductDeletionStrategy, CatalogProductDeletionStrategy>();
 builder.Services.AddScoped<IProductDeletionStrategy, CustomProductDeletionStrategy>();
+
+// Validators del modulo de reporteria (registro explicito — ADR-5).
+// ValidationBehavior recibe IValidator<T>? como opcional; sin registro explicito la validacion no se ejecuta.
+builder.Services.AddScoped<IValidator<GetOrdersByDateReportQuery>, GetOrdersByDateReportValidator>();
+builder.Services.AddScoped<IValidator<GetTopBuyersReportQuery>, GetTopBuyersReportValidator>();
+builder.Services.AddScoped<IValidator<GetProductsStockReportQuery>, GetProductsStockReportValidator>();
+builder.Services.AddScoped<IValidator<GetSupportByDateReportQuery>, GetSupportByDateReportValidator>();
 
 builder.Services.AddIdentityApiEndpoints<User>(options =>
 {

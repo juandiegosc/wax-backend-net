@@ -1,0 +1,600 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "WAX API - Reports (Dashboard de Trazabilidad)",
+    "description": "Modulo de reporteria: endpoints GET de solo lectura que exponen datos agregados de todo el sistema (ordenes, pagos, productos de catalogo, productos personalizados, soporte y usuarios) para construir un dashboard administrativo de trazabilidad.\n\n## Guia rapida de implementacion del dashboard\n\nTodos los endpoints viven bajo el prefijo `/api/Reports` y requieren el rol `Admin` (cookie de ASP.NET Identity). Cada uno devuelve un agregado ya calculado en el backend, listo para graficar; el frontend NO necesita post-procesar para totales.\n\nConvenciones transversales:\n- Autorizacion: TODOS los endpoints exigen el rol `Admin`. Un usuario no autenticado recibe 401; uno autenticado sin rol Admin recibe 403. Enviar la cookie `.AspNetCore.Identity.Application`.\n- Montos: todos los valores monetarios son enteros en la MENOR unidad de la moneda (centavos). Para mostrar, dividir entre 100. Tipos `int64`.\n- Fechas: ISO 8601 en UTC. Los parametros de rango `from`/`to` se interpretan en UTC.\n- Sin paginacion: los reportes devuelven el agregado completo (conteos por estado, series por dia, top-N). No usan cursor ni Pagination header.\n- Solo lectura: ningun endpoint muta estado; son cacheables a corto plazo en el cliente.\n\nMapeo sugerido a widgets del dashboard:\n- KPIs / tarjetas: `orders/summary`, `payments/summary`, `products/stock`, `custom-products/price-stats`, `users/summary`.\n- Graficos de barras / donut: `orders/by-status`, `products/by-type-brand`, `custom-products/funnel`, `support/summary`.\n- Graficos de linea (series temporales): `orders/by-date`, `support/by-date`.\n- Tablas / rankings: `orders/top-buyers`.",
+    "version": "1.0.0",
+    "contact": {
+      "name": "WAX Backend Team"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://localhost:5005",
+      "description": "Local development"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Reports - Orders",
+      "description": "Reportes del dominio de ordenes: resumen, serie temporal, distribucion por estado y ranking de compradores"
+    },
+    {
+      "name": "Reports - Payments",
+      "description": "Reporte de pagos: montos confirmados, fallidos y con discrepancia"
+    },
+    {
+      "name": "Reports - Products",
+      "description": "Reportes del catalogo: niveles de inventario y distribucion por tipo/marca"
+    },
+    {
+      "name": "Reports - Custom Products",
+      "description": "Reportes de productos personalizados: embudo de negociacion y estadisticas de precio acordado"
+    },
+    {
+      "name": "Reports - Support",
+      "description": "Reportes de soporte: resumen por estado/categoria y serie temporal de tickets"
+    },
+    {
+      "name": "Reports - Users",
+      "description": "Reporte de usuarios: conteo total y desglose por rol"
+    }
+  ],
+  "paths": {
+    "/api/Reports/orders/summary": {
+      "get": {
+        "tags": ["Reports - Orders"],
+        "summary": "Resumen de ordenes",
+        "description": "Devuelve los indicadores globales de ordenes: cantidad total, ingreso total (suma de Total de TODAS las ordenes), ticket promedio y el desglose por estado. Ideal para las tarjetas KPI superiores del dashboard.\n\nNotas para el dashboard:\n- `totalRevenue` suma todas las ordenes sin importar su estado (incluye Pending). Si se necesita solo ingreso confirmado, usar `payments/summary` (campo `confirmedAmount`).\n- `averageTicket` es entero (centavos) truncado: `totalRevenue / totalOrders`, o 0 si no hay ordenes.\n- `byStatus` incluye SIEMPRE todos los estados del enum, incluso los que tienen 0 ordenes, para que las graficas tengan ejes estables.",
+        "operationId": "Reports_GetOrdersSummary",
+        "responses": {
+          "200": {
+            "description": "Resumen de ordenes calculado correctamente",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OrdersSummaryReportDto" },
+                "example": {
+                  "totalOrders": 152,
+                  "totalRevenue": 18750000,
+                  "averageTicket": 123355,
+                  "byStatus": [
+                    { "status": "Pending", "count": 12, "revenue": 1450000, "percentage": 7.89 },
+                    { "status": "CustomOrder", "count": 5, "revenue": 980000, "percentage": 3.29 },
+                    { "status": "Approved", "count": 20, "revenue": 2600000, "percentage": 13.16 },
+                    { "status": "Rejected", "count": 3, "revenue": 0, "percentage": 1.97 },
+                    { "status": "PaymentRecieved", "count": 105, "revenue": 13200000, "percentage": 69.08 },
+                    { "status": "PaymentFailed", "count": 5, "revenue": 420000, "percentage": 3.29 },
+                    { "status": "PaymentMismatch", "count": 2, "revenue": 100000, "percentage": 1.32 }
+                  ]
+                }
+              }
+            }
+          },
+          "401": { "description": "Usuario no autenticado" },
+          "403": { "description": "El usuario no tiene el rol Admin" }
+        },
+        "security": [{ "cookieAuth": [] }]
+      }
+    },
+    "/api/Reports/orders/by-date": {
+      "get": {
+        "tags": ["Reports - Orders"],
+        "summary": "Ordenes por fecha (serie temporal)",
+        "description": "Devuelve una serie temporal de ordenes agrupadas por dia dentro de un rango. Pensado para graficos de linea de volumen e ingreso a lo largo del tiempo.\n\nReglas importantes:\n- `from` y `to` son obligatorios (UTC). El limite `to` es EXCLUSIVO (una orden creada exactamente en `to` no se incluye).\n- El rango maximo permitido es 366 dias; un rango invalido (`from` > `to`) o mayor a 366 dias devuelve 400.\n- `granularity` solo admite `Day` en esta version; otros valores se reservan para el futuro.\n- La respuesta omite los dias SIN ordenes (no rellena ceros). Si el grafico necesita continuidad, el frontend debe completar los dias faltantes con 0.\n- Los dias vienen ordenados ascendentemente por fecha.",
+        "operationId": "Reports_GetOrdersByDate",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Fecha de inicio del rango (UTC, inclusiva)",
+            "required": true,
+            "schema": { "type": "string", "format": "date-time" },
+            "example": "2026-05-01T00:00:00Z"
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Fecha de fin del rango (UTC, EXCLUSIVA)",
+            "required": true,
+            "schema": { "type": "string", "format": "date-time" },
+            "example": "2026-06-01T00:00:00Z"
+          },
+          {
+            "name": "granularity",
+            "in": "query",
+            "description": "Granularidad de agrupacion. En v1 solo se soporta `Day`.",
+            "required": false,
+            "schema": { "type": "string", "enum": ["Day"], "default": "Day" },
+            "example": "Day"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Serie temporal de ordenes por dia",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/OrdersByDateReportDto" }
+                },
+                "example": [
+                  { "date": "2026-05-01T00:00:00", "orderCount": 8, "revenue": 960000 },
+                  { "date": "2026-05-02T00:00:00", "orderCount": 12, "revenue": 1480000 },
+                  { "date": "2026-05-04T00:00:00", "orderCount": 5, "revenue": 610000 }
+                ]
+              }
+            }
+          },
+          "400": { "description": "Rango invalido: 'from' posterior a 'to' o rango mayor a 366 dias" },
+          "401": { "description": "Usuario no autenticado" },
+          "403": { "description": "El usuario no tiene el rol Admin" }
+        },
+        "security": [{ "cookieAuth": [] }]
+      }
+    },
+    "/api/Reports/orders/by-status": {
+      "get": {
+        "tags": ["Reports - Orders"],
+        "summary": "Distribucion de ordenes por estado",
+        "description": "Devuelve la distribucion de ordenes por estado con conteo, ingreso y porcentaje sobre el total. Pensado para grafico de donut o barras.\n\nNotas:\n- Incluye SIEMPRE todos los estados del enum, incluso con conteo 0, para ejes estables.\n- `percentage` esta sobre el total de ordenes y suma 100 (salvo redondeo). Si no hay ordenes, todos los porcentajes son 0.",
+        "operationId": "Reports_GetOrdersByStatus",
+        "responses": {
+          "200": {
+            "description": "Distribucion por estado",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/OrdersByStatusReportDto" }
+                },
+                "example": [
+                  { "status": "Pending", "count": 12, "revenue": 1450000, "percentage": 7.89 },
+                  { "status": "PaymentRecieved", "count": 105, "revenue": 13200000, "percentage": 69.08 }
+                ]
+              }
+            }
+          },
+          "401": { "description": "Usuario no autenticado" },
+          "403": { "description": "El usuario no tiene el rol Admin" }
+        },
+        "security": [{ "cookieAuth": [] }]
+      }
+    },
+    "/api/Reports/orders/top-buyers": {
+      "get": {
+        "tags": ["Reports - Orders"],
+        "summary": "Ranking de compradores",
+        "description": "Devuelve el top N de compradores ordenados por ingreso total descendente. Pensado para una tabla de mejores clientes.\n\nNotas:\n- `limit` por defecto 10; debe estar entre 1 y 100 (fuera de rango devuelve 400).\n- Los compradores se agrupan por `buyerEmail`.\n- IMPORTANTE: `userId` actualmente siempre es null por una limitacion de la agregacion SQL (no se puede resolver el id dentro del GroupBy). Usar `buyerEmail` como clave del ranking. Si el frontend requiere el id, se resolvera en una iteracion futura.",
+        "operationId": "Reports_GetTopBuyers",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Cantidad de compradores a devolver (1-100)",
+            "required": false,
+            "schema": { "type": "integer", "default": 10, "minimum": 1, "maximum": 100 },
+            "example": 10
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ranking de compradores",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/TopBuyerReportDto" }
+                },
+                "example": [
+                  { "buyerEmail": "cliente.vip@example.com", "userId": null, "orderCount": 9, "totalRevenue": 2150000 },
+                  { "buyerEmail": "comprador.frecuente@example.com", "userId": null, "orderCount": 7, "totalRevenue": 1680000 }
+                ]
+              }
+            }
+          },
+          "400": { "description": "El parametro 'limit' esta fuera del rango 1-100" },
+          "401": { "description": "Usuario no autenticado" },
+          "403": { "description": "El usuario no tiene el rol Admin" }
+        },
+        "security": [{ "cookieAuth": [] }]
+      }
+    },
+    "/api/Reports/payments/summary": {
+      "get": {
+        "tags": ["Reports - Payments"],
+        "summary": "Resumen de pagos",
+        "description": "Devuelve los conteos y montos de las ordenes segun su resultado de pago: confirmadas (PaymentRecieved), fallidas (PaymentFailed) y con discrepancia (PaymentMismatch). Pensado para tarjetas KPI de salud financiera.\n\nNotas:\n- `confirmedAmount` representa el ingreso efectivamente cobrado; usarlo como ingreso real frente al `totalRevenue` de `orders/summary`.\n- Los montos son enteros en centavos.",
+        "operationId": "Reports_GetPaymentsSummary",
+        "responses": {
+          "200": {
+            "description": "Resumen de pagos",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PaymentsSummaryReportDto" },
+                "example": {
+                  "confirmedCount": 105,
+                  "confirmedAmount": 13200000,
+                  "failedCount": 5,
+                  "failedAmount": 420000,
+                  "mismatchCount": 2,
+                  "mismatchAmount": 100000
+                }
+              }
+            }
+          },
+          "401": { "description": "Usuario no autenticado" },
+          "403": { "description": "El usuario no tiene el rol Admin" }
+        },
+        "security": [{ "cookieAuth": [] }]
+      }
+    },
+    "/api/Reports/products/stock": {
+      "get": {
+        "tags": ["Reports - Products"],
+        "summary": "Niveles de inventario del catalogo",
+        "description": "Devuelve el conteo de productos de catalogo segun su nivel de stock: agotados, bajo stock, con stock normal y total. Pensado para una tarjeta de alerta de inventario.\n\nNotas:\n- `threshold` define el umbral de 'bajo stock' (cantidad <= threshold y > 0). Por defecto 10.\n- `threshold` debe ser >= 0 (negativo devuelve 400).\n- `outOfStock` = productos con cantidad 0; `inStock` = total - outOfStock - lowStock.",
+        "operationId": "Reports_GetProductsStock",
+        "parameters": [
+          {
+            "name": "threshold",
+            "in": "query",
+            "description": "Umbral de 'bajo stock' (cantidad menor o igual a este valor y mayor que 0)",
+            "required": false,
+            "schema": { "type": "integer", "default": 10, "minimum": 0 },
+            "example": 10
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Conteo de productos por nivel de stock",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ProductsStockReportDto" },
+                "example": { "totalProducts": 84, "outOfStock": 6, "lowStock": 11, "inStock": 67 }
+              }
+            }
+          },
+          "400": { "description": "El parametro 'threshold' es negativo" },
+          "401": { "description": "Usuario no autenticado" },
+          "403": { "description": "El usuario no tiene el rol Admin" }
+        },
+        "security": [{ "cookieAuth": [] }]
+      }
+    },
+    "/api/Reports/products/by-type-brand": {
+      "get": {
+        "tags": ["Reports - Products"],
+        "summary": "Distribucion de productos por tipo y marca",
+        "description": "Devuelve el conteo de productos de catalogo agrupados por combinacion de tipo y marca. Pensado para un grafico de barras agrupadas o un heatmap.",
+        "operationId": "Reports_GetProductsByTypeBrand",
+        "responses": {
+          "200": {
+            "description": "Distribucion por tipo y marca",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/ProductsByTypeBrandReportDto" }
+                },
+                "example": [
+                  { "type": "Vinilo", "brand": "Technics", "count": 14 },
+                  { "type": "Tocadiscos", "brand": "Audio-Technica", "count": 9 },
+                  { "type": "Accesorio", "brand": "Pioneer", "count": 5 }
+                ]
+              }
+            }
+          },
+          "401": { "description": "Usuario no autenticado" },
+          "403": { "description": "El usuario no tiene el rol Admin" }
+        },
+        "security": [{ "cookieAuth": [] }]
+      }
+    },
+    "/api/Reports/custom-products/funnel": {
+      "get": {
+        "tags": ["Reports - Custom Products"],
+        "summary": "Embudo de productos personalizados",
+        "description": "Devuelve el conteo de productos personalizados por cada estado de la negociacion. Pensado para un grafico de embudo (funnel) que muestra cuantos avanzan en el flujo de cotizacion/aprobacion.\n\nNotas:\n- Incluye SIEMPRE los 6 estados del enum, incluso con conteo 0, en orden logico del flujo.\n- Orden del flujo: PendingQuotation -> AwaitingAdminReview -> AwaitingCustomerReview -> Approved/Rejected -> AddedToBasket.",
+        "operationId": "Reports_GetCustomProductsFunnel",
+        "responses": {
+          "200": {
+            "description": "Embudo de estados de productos personalizados",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/CustomProductsFunnelReportDto" }
+                },
+                "example": [
+                  { "status": "PendingQuotation", "count": 18 },
+                  { "status": "AwaitingAdminReview", "count": 7 },
+                  { "status": "AwaitingCustomerReview", "count": 5 },
+                  { "status": "Approved", "count": 12 },
+                  { "status": "Rejected", "count": 3 },
+                  { "status": "AddedToBasket", "count": 9 }
+                ]
+              }
+            }
+          },
+          "401": { "description": "Usuario no autenticado" },
+          "403": { "description": "El usuario no tiene el rol Admin" }
+        },
+        "security": [{ "cookieAuth": [] }]
+      }
+    },
+    "/api/Reports/custom-products/price-stats": {
+      "get": {
+        "tags": ["Reports - Custom Products"],
+        "summary": "Estadisticas de precio acordado",
+        "description": "Devuelve estadisticas del precio acordado (AgreedPrice) sobre los productos personalizados en estado Approved con precio definido. Pensado para tarjetas KPI de cotizacion.\n\nNotas:\n- Solo considera productos Approved cuyo AgreedPrice no es null.\n- Si no hay ninguno, `approvedCount` es 0 y min/max/average son null (no se calcula sobre conjunto vacio). El frontend debe manejar el caso null mostrando un guion o 'sin datos'.\n- `averagePrice` es entero (centavos) truncado.",
+        "operationId": "Reports_GetCustomProductsPriceStats",
+        "responses": {
+          "200": {
+            "description": "Estadisticas de precio acordado",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CustomProductsPriceStatsReportDto" },
+                "examples": {
+                  "conDatos": {
+                    "summary": "Con productos aprobados",
+                    "value": { "approvedCount": 12, "minPrice": 450000, "maxPrice": 2800000, "averagePrice": 1320000 }
+                  },
+                  "sinDatos": {
+                    "summary": "Sin productos aprobados con precio",
+                    "value": { "approvedCount": 0, "minPrice": null, "maxPrice": null, "averagePrice": null }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "Usuario no autenticado" },
+          "403": { "description": "El usuario no tiene el rol Admin" }
+        },
+        "security": [{ "cookieAuth": [] }]
+      }
+    },
+    "/api/Reports/support/summary": {
+      "get": {
+        "tags": ["Reports - Support"],
+        "summary": "Resumen de tickets de soporte",
+        "description": "Devuelve el total de tickets, el conteo por estado (Open/InProgress/Closed) y el desglose por categoria. Pensado para tarjetas KPI y un donut de categorias.\n\nNotas:\n- `byCategory` incluye SIEMPRE las 4 categorias del enum, incluso con conteo 0.",
+        "operationId": "Reports_GetSupportSummary",
+        "responses": {
+          "200": {
+            "description": "Resumen de soporte",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SupportSummaryReportDto" },
+                "example": {
+                  "total": 47,
+                  "open": 12,
+                  "inProgress": 8,
+                  "closed": 27,
+                  "byCategory": { "OrderIssue": 20, "PaymentIssue": 9, "ProductIssue": 11, "Other": 7 }
+                }
+              }
+            }
+          },
+          "401": { "description": "Usuario no autenticado" },
+          "403": { "description": "El usuario no tiene el rol Admin" }
+        },
+        "security": [{ "cookieAuth": [] }]
+      }
+    },
+    "/api/Reports/support/by-date": {
+      "get": {
+        "tags": ["Reports - Support"],
+        "summary": "Tickets de soporte por fecha (serie temporal)",
+        "description": "Devuelve una serie temporal de tickets de soporte agrupados por dia dentro de un rango. Pensado para un grafico de linea de volumen de tickets.\n\nReglas:\n- `from` y `to` obligatorios (UTC). Rango maximo 366 dias; invalido devuelve 400.\n- Omite los dias sin tickets (no rellena ceros). Vienen ordenados ascendentemente.",
+        "operationId": "Reports_GetSupportByDate",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Fecha de inicio del rango (UTC, inclusiva)",
+            "required": true,
+            "schema": { "type": "string", "format": "date-time" },
+            "example": "2026-05-01T00:00:00Z"
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Fecha de fin del rango (UTC, inclusiva)",
+            "required": true,
+            "schema": { "type": "string", "format": "date-time" },
+            "example": "2026-05-31T23:59:59Z"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Serie temporal de tickets por dia",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/SupportByDateReportDto" }
+                },
+                "example": [
+                  { "date": "2026-05-03T00:00:00", "ticketCount": 4 },
+                  { "date": "2026-05-05T00:00:00", "ticketCount": 2 }
+                ]
+              }
+            }
+          },
+          "400": { "description": "Rango invalido: 'from' posterior a 'to' o rango mayor a 366 dias" },
+          "401": { "description": "Usuario no autenticado" },
+          "403": { "description": "El usuario no tiene el rol Admin" }
+        },
+        "security": [{ "cookieAuth": [] }]
+      }
+    },
+    "/api/Reports/users/summary": {
+      "get": {
+        "tags": ["Reports - Users"],
+        "summary": "Resumen de usuarios",
+        "description": "Devuelve el total de usuarios, cuantos tienen el email confirmado y el desglose por rol. Pensado para tarjetas KPI de la base de usuarios.\n\nNotas:\n- `byRole` siempre incluye las claves `Admin`, `Registered` y `Enrolled` (inicializadas en 0). Si existieran otros roles asignados, tambien apareceran.",
+        "operationId": "Reports_GetUsersSummary",
+        "responses": {
+          "200": {
+            "description": "Resumen de usuarios",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/UsersSummaryReportDto" },
+                "example": {
+                  "totalUsers": 320,
+                  "confirmedEmails": 295,
+                  "byRole": { "Admin": 3, "Registered": 280, "Enrolled": 37 }
+                }
+              }
+            }
+          },
+          "401": { "description": "Usuario no autenticado" },
+          "403": { "description": "El usuario no tiene el rol Admin" }
+        },
+        "security": [{ "cookieAuth": [] }]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "OrdersSummaryReportDto": {
+        "type": "object",
+        "description": "Indicadores globales de ordenes",
+        "properties": {
+          "totalOrders": { "type": "integer", "description": "Cantidad total de ordenes", "example": 152 },
+          "totalRevenue": { "type": "integer", "format": "int64", "description": "Suma del Total de TODAS las ordenes en centavos", "example": 18750000 },
+          "averageTicket": { "type": "integer", "format": "int64", "description": "Ticket promedio en centavos (totalRevenue / totalOrders, truncado; 0 si no hay ordenes)", "example": 123355 },
+          "byStatus": {
+            "type": "array",
+            "description": "Desglose por estado, incluye todos los estados aun con conteo 0",
+            "items": { "$ref": "#/components/schemas/OrdersByStatusReportDto" }
+          }
+        }
+      },
+      "OrdersByStatusReportDto": {
+        "type": "object",
+        "description": "Conteo, ingreso y porcentaje de ordenes para un estado",
+        "properties": {
+          "status": { "type": "string", "description": "Estado de la orden", "enum": ["Pending", "CustomOrder", "Approved", "Rejected", "PaymentRecieved", "PaymentFailed", "PaymentMismatch"], "example": "PaymentRecieved" },
+          "count": { "type": "integer", "description": "Cantidad de ordenes en este estado", "example": 105 },
+          "revenue": { "type": "integer", "format": "int64", "description": "Suma del Total de las ordenes en este estado (centavos)", "example": 13200000 },
+          "percentage": { "type": "number", "format": "double", "description": "Porcentaje sobre el total de ordenes (0 si no hay ordenes)", "example": 69.08 }
+        }
+      },
+      "OrdersByDateReportDto": {
+        "type": "object",
+        "description": "Punto de la serie temporal diaria de ordenes",
+        "properties": {
+          "date": { "type": "string", "format": "date-time", "description": "Dia agrupado (medianoche UTC)", "example": "2026-05-02T00:00:00" },
+          "orderCount": { "type": "integer", "description": "Cantidad de ordenes creadas ese dia", "example": 12 },
+          "revenue": { "type": "integer", "format": "int64", "description": "Suma del Total de las ordenes de ese dia (centavos)", "example": 1480000 }
+        }
+      },
+      "TopBuyerReportDto": {
+        "type": "object",
+        "description": "Comprador en el ranking por ingreso total",
+        "properties": {
+          "buyerEmail": { "type": "string", "format": "email", "description": "Email del comprador (clave del ranking)", "example": "cliente.vip@example.com" },
+          "userId": { "type": "string", "nullable": true, "description": "Id del usuario. Actualmente siempre null por limitacion de la agregacion SQL.", "example": null },
+          "orderCount": { "type": "integer", "description": "Cantidad de ordenes del comprador", "example": 9 },
+          "totalRevenue": { "type": "integer", "format": "int64", "description": "Ingreso total del comprador (centavos)", "example": 2150000 }
+        }
+      },
+      "PaymentsSummaryReportDto": {
+        "type": "object",
+        "description": "Conteos y montos por resultado de pago",
+        "properties": {
+          "confirmedCount": { "type": "integer", "description": "Ordenes con pago confirmado (PaymentRecieved)", "example": 105 },
+          "confirmedAmount": { "type": "integer", "format": "int64", "description": "Monto total confirmado (centavos) — ingreso real", "example": 13200000 },
+          "failedCount": { "type": "integer", "description": "Ordenes con pago fallido (PaymentFailed)", "example": 5 },
+          "failedAmount": { "type": "integer", "format": "int64", "description": "Monto total de pagos fallidos (centavos)", "example": 420000 },
+          "mismatchCount": { "type": "integer", "description": "Ordenes con discrepancia de pago (PaymentMismatch)", "example": 2 },
+          "mismatchAmount": { "type": "integer", "format": "int64", "description": "Monto total con discrepancia (centavos)", "example": 100000 }
+        }
+      },
+      "ProductsStockReportDto": {
+        "type": "object",
+        "description": "Conteo de productos de catalogo por nivel de stock",
+        "properties": {
+          "totalProducts": { "type": "integer", "description": "Total de productos de catalogo", "example": 84 },
+          "outOfStock": { "type": "integer", "description": "Productos con cantidad 0", "example": 6 },
+          "lowStock": { "type": "integer", "description": "Productos con cantidad > 0 y <= threshold", "example": 11 },
+          "inStock": { "type": "integer", "description": "Productos con stock normal (total - outOfStock - lowStock)", "example": 67 }
+        }
+      },
+      "ProductsByTypeBrandReportDto": {
+        "type": "object",
+        "description": "Conteo de productos para una combinacion tipo+marca",
+        "properties": {
+          "type": { "type": "string", "description": "Tipo de producto", "example": "Vinilo" },
+          "brand": { "type": "string", "description": "Marca del producto", "example": "Technics" },
+          "count": { "type": "integer", "description": "Cantidad de productos con ese tipo y marca", "example": 14 }
+        }
+      },
+      "CustomProductsFunnelReportDto": {
+        "type": "object",
+        "description": "Conteo de productos personalizados para un estado del embudo",
+        "properties": {
+          "status": { "type": "string", "description": "Estado de negociacion del producto personalizado", "enum": ["PendingQuotation", "AwaitingAdminReview", "AwaitingCustomerReview", "Approved", "Rejected", "AddedToBasket"], "example": "PendingQuotation" },
+          "count": { "type": "integer", "description": "Cantidad de productos en ese estado", "example": 18 }
+        }
+      },
+      "CustomProductsPriceStatsReportDto": {
+        "type": "object",
+        "description": "Estadisticas del precio acordado de productos personalizados aprobados",
+        "properties": {
+          "approvedCount": { "type": "integer", "description": "Cantidad de productos Approved con AgreedPrice definido", "example": 12 },
+          "minPrice": { "type": "integer", "format": "int64", "nullable": true, "description": "Precio acordado minimo (centavos). Null si approvedCount es 0.", "example": 450000 },
+          "maxPrice": { "type": "integer", "format": "int64", "nullable": true, "description": "Precio acordado maximo (centavos). Null si approvedCount es 0.", "example": 2800000 },
+          "averagePrice": { "type": "integer", "format": "int64", "nullable": true, "description": "Precio acordado promedio en centavos (truncado). Null si approvedCount es 0.", "example": 1320000 }
+        }
+      },
+      "SupportSummaryReportDto": {
+        "type": "object",
+        "description": "Resumen de tickets de soporte por estado y categoria",
+        "properties": {
+          "total": { "type": "integer", "description": "Total de tickets", "example": 47 },
+          "open": { "type": "integer", "description": "Tickets en estado Open", "example": 12 },
+          "inProgress": { "type": "integer", "description": "Tickets en estado InProgress", "example": 8 },
+          "closed": { "type": "integer", "description": "Tickets en estado Closed", "example": 27 },
+          "byCategory": {
+            "type": "object",
+            "description": "Conteo por categoria. Siempre incluye las 4 categorias del enum aun con 0.",
+            "additionalProperties": { "type": "integer" },
+            "example": { "OrderIssue": 20, "PaymentIssue": 9, "ProductIssue": 11, "Other": 7 }
+          }
+        }
+      },
+      "SupportByDateReportDto": {
+        "type": "object",
+        "description": "Punto de la serie temporal diaria de tickets de soporte",
+        "properties": {
+          "date": { "type": "string", "format": "date-time", "description": "Dia agrupado (medianoche UTC)", "example": "2026-05-03T00:00:00" },
+          "ticketCount": { "type": "integer", "description": "Cantidad de tickets creados ese dia", "example": 4 }
+        }
+      },
+      "UsersSummaryReportDto": {
+        "type": "object",
+        "description": "Resumen de la base de usuarios",
+        "properties": {
+          "totalUsers": { "type": "integer", "description": "Total de usuarios registrados", "example": 320 },
+          "confirmedEmails": { "type": "integer", "description": "Usuarios con email confirmado", "example": 295 },
+          "byRole": {
+            "type": "object",
+            "description": "Conteo de usuarios por rol. Siempre incluye Admin, Registered y Enrolled.",
+            "additionalProperties": { "type": "integer" },
+            "example": { "Admin": 3, "Registered": 280, "Enrolled": 37 }
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "cookieAuth": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": ".AspNetCore.Identity.Application",
+        "description": "Cookie de autenticacion de ASP.NET Identity. Se obtiene via POST /api/login?useCookies=true con un usuario que tenga el rol Admin."
+      }
+    }
+  }
+}
