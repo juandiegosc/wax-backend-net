@@ -253,4 +253,71 @@ public class OrderReadRepositoryTests
         result[0].OrderStatus.Should().Be("Pending");
         result[0].UserId.Should().Be(userId);
     }
+
+    // ── GetOrderReportRows (proyeccion escalar para reportes) ───────────────────
+
+    [Fact]
+    public async Task GetOrderReportRows_SinFiltro_RetornaTodasLasFilasEscalares()
+    {
+        using var context = CreateInMemoryContext();
+        context.Orders.Add(CreateOrderReadModel());
+        context.Orders.Add(CreateOrderReadModel());
+        await context.SaveChangesAsync();
+
+        var repository = new OrderReadRepository(context);
+
+        var result = await repository.GetOrderReportRows().ToListAsync();
+
+        result.Should().HaveCount(2);
+        result.Should().OnlyContain(r => r.Total == 210 && r.OrderStatus == "Pending");
+        result.Should().OnlyContain(r => r.BuyerEmail == "buyer@example.com");
+    }
+
+    [Fact]
+    public async Task GetOrderReportRows_ConRangoDeFechas_FiltraPorCreatedAt()
+    {
+        using var context = CreateInMemoryContext();
+
+        var dentro = CreateOrderReadModel();
+        dentro.CreatedAt = new DateTime(2026, 5, 10, 12, 0, 0, DateTimeKind.Utc);
+        var antes = CreateOrderReadModel();
+        antes.CreatedAt = new DateTime(2026, 4, 1, 0, 0, 0, DateTimeKind.Utc);
+        var despues = CreateOrderReadModel();
+        despues.CreatedAt = new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        context.Orders.AddRange(dentro, antes, despues);
+        await context.SaveChangesAsync();
+
+        var repository = new OrderReadRepository(context);
+
+        var result = await repository
+            .GetOrderReportRows(new DateTime(2026, 5, 1, 0, 0, 0, DateTimeKind.Utc), new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc))
+            .ToListAsync();
+
+        // 'to' es exclusivo: incluye 'dentro' (10 may), excluye 'antes' y 'despues' (1 jun).
+        result.Should().HaveCount(1);
+        result[0].CreatedAt.Should().Be(new DateTime(2026, 5, 10, 12, 0, 0, DateTimeKind.Utc));
+    }
+
+    [Fact]
+    public async Task GetOrderReportRows_PermiteAgregacionGroupBy()
+    {
+        using var context = CreateInMemoryContext();
+        var aprobada = CreateOrderReadModel();
+        aprobada.OrderStatus = "Approved";
+        var pendiente = CreateOrderReadModel();
+        pendiente.OrderStatus = "Pending";
+        context.Orders.AddRange(aprobada, pendiente);
+        await context.SaveChangesAsync();
+
+        var repository = new OrderReadRepository(context);
+
+        var porEstado = await repository.GetOrderReportRows()
+            .GroupBy(r => r.OrderStatus)
+            .Select(g => new { g.Key, Count = g.Count(), Revenue = g.Sum(r => r.Total) })
+            .ToListAsync();
+
+        porEstado.Should().HaveCount(2);
+        porEstado.Should().Contain(e => e.Key == "Approved" && e.Count == 1 && e.Revenue == 210);
+    }
 }

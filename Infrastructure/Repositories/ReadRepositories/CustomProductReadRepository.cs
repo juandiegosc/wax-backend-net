@@ -1,6 +1,7 @@
 using System.Linq.Expressions;
 using Application.CustomProducts.DTOs;
 using Application.Interfaces.Repositories.ReadRepositories;
+using Application.Reports.DTOs;
 using Microsoft.EntityFrameworkCore;
 using Persistence;
 using Persistence.ReadModels;
@@ -16,6 +17,14 @@ public class CustomProductReadRepository(ReadDbContext context) : ICustomProduct
 
     public IQueryable<CustomProductDto> GetByOwner(string ownerUserId)
         => context.CustomProducts.Where(p => p.OwnerUserId == ownerUserId).Select(MapToDto);
+
+    /// <inheritdoc/>
+    public IQueryable<CustomProductReportRow> GetCustomProductReportRows()
+        => context.CustomProducts.Select(p => new CustomProductReportRow
+        {
+            Status     = p.Status,
+            AgreedPrice = p.AgreedPrice
+        });
 
     private static readonly Expression<Func<CustomProductReadModel, CustomProductDto>> MapToDto = p => new CustomProductDto
     {
