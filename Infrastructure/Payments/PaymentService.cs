@@ -18,7 +18,7 @@ public class PaymentService(IConfiguration configuration, ILogger<PaymentService
 
         var intent = new PaymentIntent();
         var subtotal = basket.Items.Sum(item => item.Quantity * item.Product.Price);
-        var deliveryFee = subtotal > 10000 ? 0 : 500; 
+        var deliveryFee = (long)(subtotal * 0.15m);
 
         if (string.IsNullOrEmpty(basket.PaymentIntentId))
         {

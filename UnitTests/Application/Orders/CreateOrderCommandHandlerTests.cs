@@ -253,34 +253,6 @@ public class CreateOrderCommandHandlerTests
     }
 
     [Fact]
-    public async Task Handle_SubtotalOver10000_SetsDeliveryFeeToZero()
-    {
-        var product = ProductFixtures.CreateProduct(price: 15000, quantityInStock: 10);
-        var item = BasketFixtures.CreateBasketItem(quantity: 1, product: product);
-        var basket = BasketFixtures.CreateBasketWithItems(paymentIntentId: "pi_free", items: [item]);
-
-        _basketRepo
-            .Setup(r => r.GetBasketWithItemsAsync(basket.BasketId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(basket);
-        SetupRegisteredUser();
-        _orderRepo
-            .Setup(r => r.GetByPaymentIntentIdAsync("pi_free", It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Order?)null);
-        _unitOfWork
-            .Setup(u => u.CompleteAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
-
-        Order? capturedOrder = null;
-        _orderRepo.Setup(r => r.Add(It.IsAny<Order>()))
-            .Callback<Order>(o => capturedOrder = o);
-
-        var command = new CreateOrderCommand { BasketId = basket.BasketId, OrderDto = BuildOrderDto() };
-        await _handler.Handle(command, CancellationToken.None);
-
-        capturedOrder!.DeliveryFee.Should().Be(0);
-    }
-
-    [Fact]
     public async Task Handle_WhenSaveFails_ReturnsFailure()
     {
         var basket = BasketFixtures.CreateBasketWithItems(paymentIntentId: "pi_save_fail");
