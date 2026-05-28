@@ -2,6 +2,7 @@ using System.Linq.Expressions;
 using System.Text.Json;
 using Application.Interfaces.Repositories.ReadRepositories;
 using Application.Orders.DTOs;
+using Application.Reports.DTOs;
 using Microsoft.EntityFrameworkCore;
 using Persistence;
 using Persistence.ReadModels;
@@ -40,6 +41,26 @@ public class OrderReadRepository(ReadDbContext context) : IOrderReadRepository
         return query.Select(MapToDto);
     }
     
+    public IQueryable<OrderReportRow> GetOrderReportRows(DateTime? from = null, DateTime? to = null)
+    {
+        var q = context.Orders.AsQueryable();
+
+        if (from.HasValue)
+            q = q.Where(o => o.CreatedAt >= from.Value);
+
+        if (to.HasValue)
+            q = q.Where(o => o.CreatedAt < to.Value);
+
+        return q.Select(o => new OrderReportRow
+        {
+            OrderStatus = o.OrderStatus,
+            Total = o.Total,
+            BuyerEmail = o.BuyerEmail,
+            UserId = o.UserId,
+            CreatedAt = o.CreatedAt
+        });
+    }
+
     private static readonly Expression<Func<OrderReadModel, OrderDto>> MapToDto = o => new OrderDto
     {
         Id = o.Id,

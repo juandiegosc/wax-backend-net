@@ -153,7 +153,7 @@ public class CreateOrderCommandHandler(
 
     private static long CalculateDeliveryFee(long subtotal)
     {
-        return subtotal > 10000 ? 0 : 500;
+        return (long)(subtotal * 0.15m);
     }
 
     #endregion

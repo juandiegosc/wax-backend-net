@@ -60,8 +60,6 @@ public class SupportController : BaseApiController
     #endregion
 
     #region HttpPut methods
-
-    [Authorize(Roles = Roles.Registered)]
     [Authorize(Roles = Roles.Admin)]
     [HttpPut("{id}")]
     [ProducesResponseType(200)]
@@ -75,8 +73,7 @@ public class SupportController : BaseApiController
     #endregion
 
     #region HttpDelete methods
-
-    [Authorize(Roles = Roles.Registered)]
+    
     [Authorize(Roles = Roles.Admin)]
     [HttpDelete("{id}")]
     [ProducesResponseType(200)]
