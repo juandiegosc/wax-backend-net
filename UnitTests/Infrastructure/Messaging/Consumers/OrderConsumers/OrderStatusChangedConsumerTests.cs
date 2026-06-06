@@ -1,4 +1,6 @@
 using Application.IntegrationEvents.OrderEvents;
+using Application.Interfaces.Services;
+using Application.Notifications.Requests;
 using Infrastructure.Messaging.Consumers.OrderConsumers;
 using MassTransit;
 using Microsoft.EntityFrameworkCore;
@@ -57,7 +59,8 @@ public class OrderStatusChangedConsumerTests
         await context.SaveChangesAsync();
 
         var logger = CreateLogger();
-        var consumer = new OrderStatusChangedConsumer(context, logger);
+        var emailService = new Mock<IEmailService>();
+        var consumer = new OrderStatusChangedConsumer(context, logger, emailService.Object);
         var @event = new OrderStatusChangedIntegrationEvent
         {
             OrderId = orderId,
@@ -80,7 +83,8 @@ public class OrderStatusChangedConsumerTests
     {
         using var context = CreateInMemoryContext();
         var logger = CreateLogger();
-        var consumer = new OrderStatusChangedConsumer(context, logger);
+        var emailService = new Mock<IEmailService>();
+        var consumer = new OrderStatusChangedConsumer(context, logger, emailService.Object);
         var @event = new OrderStatusChangedIntegrationEvent
         {
             OrderId = "non-existent",
@@ -107,7 +111,8 @@ public class OrderStatusChangedConsumerTests
         await context.SaveChangesAsync();
 
         var logger = CreateLogger();
-        var consumer = new OrderStatusChangedConsumer(context, logger);
+        var emailService = new Mock<IEmailService>();
+        var consumer = new OrderStatusChangedConsumer(context, logger, emailService.Object);
         var eventTime = DateTime.UtcNow;
         var @event = new OrderStatusChangedIntegrationEvent
         {
@@ -136,7 +141,8 @@ public class OrderStatusChangedConsumerTests
         await context.SaveChangesAsync();
 
         var logger = CreateLogger();
-        var consumer = new OrderStatusChangedConsumer(context, logger);
+        var emailService = new Mock<IEmailService>();
+        var consumer = new OrderStatusChangedConsumer(context, logger, emailService.Object);
         var @event = new OrderStatusChangedIntegrationEvent
         {
             OrderId = orderId,
@@ -153,5 +159,76 @@ public class OrderStatusChangedConsumerTests
         order!.BuyerEmail.Should().Be("buyer@test.com");
         order.Subtotal.Should().Be(5000);
         order.DeliveryFee.Should().Be(500);
+    }
+
+    // ── NEW: 5.1 email wiring tests ───────────────────────────────────────────
+
+    [Fact]
+    public async Task Consume_WhenOrderExists_SendsEmailWithCorrectData()
+    {
+        using var context = CreateInMemoryContext();
+        var orderId = Guid.NewGuid().ToString();
+        context.Orders.Add(CreateOrderReadModel(orderId, "Pending"));
+        await context.SaveChangesAsync();
+
+        var logger = CreateLogger();
+        var emailService = new Mock<IEmailService>();
+        var consumer = new OrderStatusChangedConsumer(context, logger, emailService.Object);
+
+        var @event = new OrderStatusChangedIntegrationEvent
+        {
+            OrderId = orderId,
+            NewStatus = "PaymentReceived"
+        };
+
+        var contextMock = new Mock<ConsumeContext<OrderStatusChangedIntegrationEvent>>();
+        contextMock.Setup(c => c.Message).Returns(@event);
+        contextMock.Setup(c => c.CancellationToken).Returns(CancellationToken.None);
+
+        await consumer.Consume(contextMock.Object);
+
+        emailService.Verify(
+            e => e.SendAsync(
+                It.Is<OrderStatusChangedEmailRequest>(r =>
+                    r.ToEmail == "buyer@test.com" &&
+                    r.OldStatus == "Pending" &&
+                    r.NewStatus == "PaymentReceived" &&
+                    r.Total == 5500),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task Consume_WhenEmailFails_DoesNotPropagateExceptionAndModelIsPersisted()
+    {
+        using var context = CreateInMemoryContext();
+        var orderId = Guid.NewGuid().ToString();
+        context.Orders.Add(CreateOrderReadModel(orderId, "Pending"));
+        await context.SaveChangesAsync();
+
+        var logger = CreateLogger();
+        var emailService = new Mock<IEmailService>();
+        emailService
+            .Setup(e => e.SendAsync(It.IsAny<OrderStatusChangedEmailRequest>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new Exception("Email service failure"));
+
+        var consumer = new OrderStatusChangedConsumer(context, logger, emailService.Object);
+
+        var @event = new OrderStatusChangedIntegrationEvent
+        {
+            OrderId = orderId,
+            NewStatus = "Shipped"
+        };
+
+        var contextMock = new Mock<ConsumeContext<OrderStatusChangedIntegrationEvent>>();
+        contextMock.Setup(c => c.Message).Returns(@event);
+        contextMock.Setup(c => c.CancellationToken).Returns(CancellationToken.None);
+
+        var act = async () => await consumer.Consume(contextMock.Object);
+
+        await act.Should().NotThrowAsync();
+
+        var order = await context.Orders.FirstOrDefaultAsync(o => o.Id == orderId);
+        order!.OrderStatus.Should().Be("Shipped");
     }
 }

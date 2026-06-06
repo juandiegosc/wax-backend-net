@@ -3,6 +3,7 @@ using Application.IntegrationEvents.ProductEvents;
 using Application.Interfaces.Publish;
 using Application.Interfaces.Repositories.WriteRepositories;
 using Application.Interfaces.Services;
+using Application.Notifications.Requests;
 using Application.Payment.Commands;
 using Application.Payment.Events;
 using Domain.OrderAggregate;
@@ -21,6 +22,7 @@ public class HandleStripeWebhookCommandHandlerTests
     private readonly Mock<IUnitOfWork> _unitOfWork = new();
     private readonly Mock<IEventPublisher> _eventPublisher = new();
     private readonly Mock<ILogger<HandleStripeWebhookCommandHandler>> _logger = new();
+    private readonly Mock<IEmailService> _emailService = new();
     private readonly HandleStripeWebhookCommandHandler _handler;
 
     public HandleStripeWebhookCommandHandlerTests()
@@ -32,7 +34,8 @@ public class HandleStripeWebhookCommandHandlerTests
             _productRepo.Object,
             _unitOfWork.Object,
             _eventPublisher.Object,
-            _logger.Object);
+            _logger.Object,
+            _emailService.Object);
     }
 
     private static HandleStripeWebhookCommand CreateCommand() => new()
@@ -356,5 +359,133 @@ public class HandleStripeWebhookCommandHandlerTests
         var result = await _handler.Handle(CreateCommand(), CancellationToken.None);
 
         result.IsSuccess.Should().BeTrue();
+    }
+
+    // ── NEW: 5.3 email wiring tests ───────────────────────────────────────────
+
+    [Fact]
+    public async Task Handle_WhenPaymentSucceeded_WithBillingAddress_SendsEmailWithBillingName()
+    {
+        var order = OrderFixtures.CreateOrder(buyerEmail: "john@example.com");
+        order.BillingAddress.Name = "John Buyer";
+
+        var stripeEvent = new StripeEventResult(
+            Type: "payment_intent.succeeded",
+            Status: "succeeded",
+            IntentId: order.PaymentIntentId,
+            Amount: order.GetTotal());
+
+        _paymentService
+            .Setup(p => p.ConstructStripeEvent(It.IsAny<string>(), It.IsAny<string>()))
+            .Returns(stripeEvent);
+
+        _orderRepo
+            .Setup(r => r.GetByPaymentIntentIdAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(order);
+
+        _basketRepo
+            .Setup(r => r.GetBasketWithItemsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((DomainBasket?)null);
+
+        await _handler.Handle(CreateCommand(), CancellationToken.None);
+
+        _emailService.Verify(
+            e => e.SendAsync(
+                It.Is<PaymentConfirmedEmailRequest>(r =>
+                    r.ToEmail == "john@example.com" &&
+                    r.ToName == "John Buyer"),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task Handle_WhenPaymentSucceeded_WithNullBillingAddress_FallsBackToBuyerEmail()
+    {
+        var order = OrderFixtures.CreateOrder(buyerEmail: "fallback@example.com");
+        order.BillingAddress = null!;
+
+        var stripeEvent = new StripeEventResult(
+            Type: "payment_intent.succeeded",
+            Status: "succeeded",
+            IntentId: order.PaymentIntentId,
+            Amount: order.GetTotal());
+
+        _paymentService
+            .Setup(p => p.ConstructStripeEvent(It.IsAny<string>(), It.IsAny<string>()))
+            .Returns(stripeEvent);
+
+        _orderRepo
+            .Setup(r => r.GetByPaymentIntentIdAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(order);
+
+        _basketRepo
+            .Setup(r => r.GetBasketWithItemsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((DomainBasket?)null);
+
+        await _handler.Handle(CreateCommand(), CancellationToken.None);
+
+        _emailService.Verify(
+            e => e.SendAsync(
+                It.Is<PaymentConfirmedEmailRequest>(r =>
+                    r.ToName == "fallback@example.com"),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task Handle_WhenPaymentSucceeded_AndOrderNotFound_DoesNotSendEmail()
+    {
+        var stripeEvent = new StripeEventResult(
+            Type: "payment_intent.succeeded",
+            Status: "succeeded",
+            IntentId: "unknown_intent",
+            Amount: 0);
+
+        _paymentService
+            .Setup(p => p.ConstructStripeEvent(It.IsAny<string>(), It.IsAny<string>()))
+            .Returns(stripeEvent);
+
+        _orderRepo
+            .Setup(r => r.GetByPaymentIntentIdAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Order?)null);
+
+        await _handler.Handle(CreateCommand(), CancellationToken.None);
+
+        _emailService.Verify(
+            e => e.SendAsync(It.IsAny<PaymentConfirmedEmailRequest>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task Handle_WhenPaymentSucceeded_AndEmailFails_DoesNotPropagateException()
+    {
+        var order = OrderFixtures.CreateOrder(buyerEmail: "buyer@example.com");
+
+        var stripeEvent = new StripeEventResult(
+            Type: "payment_intent.succeeded",
+            Status: "succeeded",
+            IntentId: order.PaymentIntentId,
+            Amount: order.GetTotal());
+
+        _paymentService
+            .Setup(p => p.ConstructStripeEvent(It.IsAny<string>(), It.IsAny<string>()))
+            .Returns(stripeEvent);
+
+        _orderRepo
+            .Setup(r => r.GetByPaymentIntentIdAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(order);
+
+        _basketRepo
+            .Setup(r => r.GetBasketWithItemsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((DomainBasket?)null);
+
+        _emailService
+            .Setup(e => e.SendAsync(It.IsAny<PaymentConfirmedEmailRequest>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new Exception("Email failure"));
+
+        var result = await _handler.Handle(CreateCommand(), CancellationToken.None);
+
+        result.IsSuccess.Should().BeTrue();
+        _unitOfWork.Verify(u => u.CompleteAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 }

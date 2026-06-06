@@ -1,4 +1,6 @@
 using Application.IntegrationEvents.SupportTicketEvents;
+using Application.Interfaces.Services;
+using Application.Notifications.Requests;
 using Infrastructure.Messaging.Consumers.SupportTicketConsumers;
 using MassTransit;
 using Microsoft.EntityFrameworkCore;
@@ -48,7 +50,8 @@ public class SupportTicketStatusChangedConsumerTests
         await context.SaveChangesAsync();
 
         var logger = CreateLogger();
-        var consumer = new SupportTicketStatusChangedConsumer(context, logger);
+        var emailService = new Mock<IEmailService>();
+        var consumer = new SupportTicketStatusChangedConsumer(context, logger, emailService.Object);
         var @event = new SupportTicketStatusChangedIntegrationEvent
         {
             TicketId = ticketId,
@@ -71,7 +74,8 @@ public class SupportTicketStatusChangedConsumerTests
     {
         using var context = CreateInMemoryContext();
         var logger = CreateLogger();
-        var consumer = new SupportTicketStatusChangedConsumer(context, logger);
+        var emailService = new Mock<IEmailService>();
+        var consumer = new SupportTicketStatusChangedConsumer(context, logger, emailService.Object);
         var @event = new SupportTicketStatusChangedIntegrationEvent
         {
             TicketId = "non-existent",
@@ -96,7 +100,8 @@ public class SupportTicketStatusChangedConsumerTests
         await context.SaveChangesAsync();
 
         var logger = CreateLogger();
-        var consumer = new SupportTicketStatusChangedConsumer(context, logger);
+        var emailService = new Mock<IEmailService>();
+        var consumer = new SupportTicketStatusChangedConsumer(context, logger, emailService.Object);
         var eventTime = DateTime.UtcNow;
         var @event = new SupportTicketStatusChangedIntegrationEvent
         {
@@ -125,7 +130,8 @@ public class SupportTicketStatusChangedConsumerTests
         await context.SaveChangesAsync();
 
         var logger = CreateLogger();
-        var consumer = new SupportTicketStatusChangedConsumer(context, logger);
+        var emailService = new Mock<IEmailService>();
+        var consumer = new SupportTicketStatusChangedConsumer(context, logger, emailService.Object);
         var @event = new SupportTicketStatusChangedIntegrationEvent
         {
             TicketId = ticketId,
@@ -143,5 +149,88 @@ public class SupportTicketStatusChangedConsumerTests
         ticket.Subject.Should().Be("Subject");
         ticket.Description.Should().Be("Description");
         ticket.UserId.Should().Be("user-1");
+    }
+
+    // ── NEW: 5.7 email wiring tests ───────────────────────────────────────────
+
+    [Fact]
+    public async Task Consume_WhenTicketStatusChanged_SendsEmailWithCorrectData()
+    {
+        using var context = CreateInMemoryContext();
+        var ticketId = Guid.NewGuid().ToString();
+        var ticket = new SupportTicketReadModel
+        {
+            Id = ticketId,
+            UserId = "user-1",
+            UserEmail = "ticket-owner@example.com",
+            UserFullName = "Alice",
+            OrderId = "order-1",
+            Category = "PaymentIssue",
+            Status = "Open",
+            Subject = "Broken item",
+            Description = "My item is broken",
+            CreatedAt = DateTime.UtcNow,
+            LastSyncedAt = DateTime.UtcNow.AddMinutes(-5)
+        };
+        context.SupportTickets.Add(ticket);
+        await context.SaveChangesAsync();
+
+        var logger = CreateLogger();
+        var emailService = new Mock<IEmailService>();
+        var consumer = new SupportTicketStatusChangedConsumer(context, logger, emailService.Object);
+
+        var @event = new SupportTicketStatusChangedIntegrationEvent
+        {
+            TicketId = ticketId,
+            NewStatus = "Resolved"
+        };
+
+        var contextMock = new Mock<ConsumeContext<SupportTicketStatusChangedIntegrationEvent>>();
+        contextMock.Setup(c => c.Message).Returns(@event);
+        contextMock.Setup(c => c.CancellationToken).Returns(CancellationToken.None);
+
+        await consumer.Consume(contextMock.Object);
+
+        emailService.Verify(
+            e => e.SendAsync(
+                It.Is<SupportTicketUpdatedEmailRequest>(r =>
+                    r.ToEmail == "ticket-owner@example.com" &&
+                    r.NewStatus == "Resolved"),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task Consume_WhenEmailFails_DoesNotPropagateExceptionAndUpdateIsPersisted()
+    {
+        using var context = CreateInMemoryContext();
+        var ticketId = Guid.NewGuid().ToString();
+        context.SupportTickets.Add(CreateTicketReadModel(ticketId, "Open"));
+        await context.SaveChangesAsync();
+
+        var logger = CreateLogger();
+        var emailService = new Mock<IEmailService>();
+        emailService
+            .Setup(e => e.SendAsync(It.IsAny<SupportTicketUpdatedEmailRequest>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new Exception("Email failure"));
+
+        var consumer = new SupportTicketStatusChangedConsumer(context, logger, emailService.Object);
+
+        var @event = new SupportTicketStatusChangedIntegrationEvent
+        {
+            TicketId = ticketId,
+            NewStatus = "Closed"
+        };
+
+        var contextMock = new Mock<ConsumeContext<SupportTicketStatusChangedIntegrationEvent>>();
+        contextMock.Setup(c => c.Message).Returns(@event);
+        contextMock.Setup(c => c.CancellationToken).Returns(CancellationToken.None);
+
+        var act = async () => await consumer.Consume(contextMock.Object);
+
+        await act.Should().NotThrowAsync();
+
+        var updated = await context.SupportTickets.FirstOrDefaultAsync(t => t.Id == ticketId);
+        updated!.Status.Should().Be("Closed");
     }
 }

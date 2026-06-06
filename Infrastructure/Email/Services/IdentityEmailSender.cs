@@ -28,7 +28,7 @@ public class IdentityEmailSender(IEmailService emailService, IOptions<EmailSetti
             ToEmail = email,
             ToName = user.UserName ?? email,
             ResetCode = resetCode,
-            ResetLink = $"{_settings.BaseUrl}/reset-password?code={resetCode}"
+            ResetLink = $"{_settings.BaseUrl}/reset-password?code={Uri.EscapeDataString(resetCode)}"
         };
         await emailService.SendAsync(request);
     }

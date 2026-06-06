@@ -6,10 +6,13 @@ using Application.User.DTOs;
 using Application.User.Queries;
 using Domain.Entities;
 using Domain.Enumerators;
+using Infrastructure.Email;
 using MediatR;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using System.Security.Claims;
 using UnitTests.Helpers;
 
@@ -21,14 +24,24 @@ public class AccountControllerTests
     private readonly Mock<SignInManager<User>> _signInManager;
     private readonly Mock<IEmailSender<User>> _emailSender = new();
     private readonly Mock<IMediator> _mediator;
+    private readonly Mock<ILogger<AccountController>> _logger = new();
     private readonly AccountController _controller;
+
+    private static readonly EmailSettings _emailSettings = new()
+    {
+        ApiToken = "test",
+        FromEmail = "from@example.com",
+        FromName = "WAX",
+        BaseUrl = "https://app.example.com"
+    };
 
     public AccountControllerTests()
     {
         _userManager = CreateUserManagerMock();
         _signInManager = CreateSignInManagerMock(_userManager);
+        var options = Options.Create(_emailSettings);
         (_mediator, _controller) = ControllerTestFactory.Create(
-            new AccountController(_signInManager.Object, _emailSender.Object));
+            new AccountController(_signInManager.Object, _emailSender.Object, options, _logger.Object));
     }
 
     private static Mock<UserManager<User>> CreateUserManagerMock()
@@ -74,6 +87,9 @@ public class AccountControllerTests
         _userManager
             .Setup(m => m.AddToRoleAsync(It.IsAny<User>(), Roles.Enrolled))
             .ReturnsAsync(IdentityResult.Success);
+        _userManager
+            .Setup(m => m.GenerateEmailConfirmationTokenAsync(It.IsAny<User>()))
+            .ReturnsAsync("confirmation-token");
 
         var result = await _controller.RegisterUser(dto);
 
@@ -94,6 +110,74 @@ public class AccountControllerTests
         result.Should().BeAssignableTo<ObjectResult>()
             .Which.StatusCode.Should().Be(400);
         _userManager.Verify(m => m.AddToRoleAsync(It.IsAny<User>(), It.IsAny<string>()), Times.Never);
+    }
+
+    // ── NEW: 6.1 confirmation email tests ─────────────────────────────────────
+
+    [Fact]
+    public async Task RegisterUser_WhenSucceeds_SendsConfirmationEmailWithEncodedToken()
+    {
+        var dto = new RegisterDto { Email = "new@test.com", Password = "Pass123!" };
+        const string rawToken = "token+with/special=chars";
+        var expectedEncodedToken = Uri.EscapeDataString(rawToken);
+
+        _userManager
+            .Setup(m => m.CreateAsync(It.IsAny<User>(), dto.Password))
+            .ReturnsAsync(IdentityResult.Success);
+        _userManager
+            .Setup(m => m.AddToRoleAsync(It.IsAny<User>(), Roles.Enrolled))
+            .ReturnsAsync(IdentityResult.Success);
+        _userManager
+            .Setup(m => m.GenerateEmailConfirmationTokenAsync(It.IsAny<User>()))
+            .ReturnsAsync(rawToken);
+
+        string? capturedLink = null;
+        _emailSender
+            .Setup(e => e.SendConfirmationLinkAsync(It.IsAny<User>(), It.IsAny<string>(), It.IsAny<string>()))
+            .Callback<User, string, string>((u, email, link) => capturedLink = link)
+            .Returns(Task.CompletedTask);
+
+        var result = await _controller.RegisterUser(dto);
+
+        result.Should().BeOfType<OkResult>();
+        _emailSender.Verify(
+            e => e.SendConfirmationLinkAsync(It.IsAny<User>(), dto.Email, It.IsAny<string>()),
+            Times.Once);
+        capturedLink.Should().Contain(expectedEncodedToken);
+        capturedLink.Should().NotContain(rawToken.Replace("+", "").Replace("/", "").Replace("=", ""));
+    }
+
+    [Fact]
+    public async Task RegisterUser_WhenEmailSenderThrows_StillReturnsOkAndLogsError()
+    {
+        var dto = new RegisterDto { Email = "new@test.com", Password = "Pass123!" };
+
+        _userManager
+            .Setup(m => m.CreateAsync(It.IsAny<User>(), dto.Password))
+            .ReturnsAsync(IdentityResult.Success);
+        _userManager
+            .Setup(m => m.AddToRoleAsync(It.IsAny<User>(), Roles.Enrolled))
+            .ReturnsAsync(IdentityResult.Success);
+        _userManager
+            .Setup(m => m.GenerateEmailConfirmationTokenAsync(It.IsAny<User>()))
+            .ReturnsAsync("some-token");
+
+        _emailSender
+            .Setup(e => e.SendConfirmationLinkAsync(It.IsAny<User>(), It.IsAny<string>(), It.IsAny<string>()))
+            .ThrowsAsync(new Exception("Email failure"));
+
+        var result = await _controller.RegisterUser(dto);
+
+        result.Should().BeOfType<OkResult>();
+
+        _logger.Verify(
+            l => l.Log(
+                LogLevel.Error,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("Failed to send confirmation email")),
+                It.IsAny<Exception?>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Once);
     }
 
     // ── GetUserInfo ───────────────────────────────────────────────────────────
@@ -133,7 +217,6 @@ public class AccountControllerTests
 
         var ok = result.Should().BeOfType<OkObjectResult>().Subject;
         ok.Value.Should().NotBeNull();
-        // Value is an anonymous object; verify structure via reflection
         var value = ok.Value!;
         var type = value.GetType();
         type.GetProperty("Email")!.GetValue(value).Should().Be(user.Email);
