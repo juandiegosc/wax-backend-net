@@ -111,6 +111,46 @@ public class IdentityEmailSenderTests
         captured!.ResetLink.Should().Be("https://app.example.com/reset-password?code=CODE456");
     }
 
+    // ── NEW: 7.1 URL escape tests ─────────────────────────────────────────────
+
+    [Fact]
+    public async Task SendPasswordResetCodeAsync_WhenResetCodeHasSpecialChars_EncodesInResetLink()
+    {
+        var sender = CreateSender();
+        var user = CreateUser("resetuser");
+        PasswordResetEmailRequest? captured = null;
+
+        _emailService
+            .Setup(s => s.SendAsync(It.IsAny<EmailRequest>(), It.IsAny<CancellationToken>()))
+            .Callback<EmailRequest, CancellationToken>((r, _) => captured = r as PasswordResetEmailRequest)
+            .Returns(Task.CompletedTask);
+
+        await sender.SendPasswordResetCodeAsync(user, "user@example.com", "abc+/=def");
+
+        captured.Should().NotBeNull();
+        captured!.ResetLink.Should().Contain("abc%2B%2F%3Ddef");
+        captured.ResetLink.Should().NotContain("abc+/=def");
+    }
+
+    [Fact]
+    public async Task SendPasswordResetLinkAsync_DoesNotApplyAdditionalEscaping()
+    {
+        var sender = CreateSender();
+        var user = CreateUser("linkuser");
+        PasswordResetEmailRequest? captured = null;
+
+        _emailService
+            .Setup(s => s.SendAsync(It.IsAny<EmailRequest>(), It.IsAny<CancellationToken>()))
+            .Callback<EmailRequest, CancellationToken>((r, _) => captured = r as PasswordResetEmailRequest)
+            .Returns(Task.CompletedTask);
+
+        const string prebuiltLink = "https://example.com/reset?code=already%2Fencoded";
+        await sender.SendPasswordResetLinkAsync(user, "user@example.com", prebuiltLink);
+
+        captured.Should().NotBeNull();
+        captured!.ResetLink.Should().Be(prebuiltLink);
+    }
+
     [Fact]
     public async Task SendPasswordResetLinkAsync_SendsPasswordResetEmailWithLink()
     {

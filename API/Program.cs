@@ -14,9 +14,9 @@ using Application.Reports.Validators;
 using Domain.Entities;
 using Domain.Enumerators;
 using FluentValidation;
+using Infrastructure.Billing;
 using Infrastructure.Cookies;
 using Infrastructure.Email;
-using Infrastructure.Email.Adapters;
 using Infrastructure.Email.EmailTemplates;
 using Infrastructure.Email.Services;
 using Infrastructure.Images;
@@ -103,22 +103,26 @@ builder.Services.AddMassTransit(configuration =>
     });
 });
 
-builder.Services.AddHttpClient("ResendClient");
+builder.Services.AddOptions();
 builder.Services.Configure<EmailSettings>(builder.Configuration.GetSection("EmailSettings"));
-builder.Services.Configure<ResendClientOptions>(options =>
-{
-    options.ApiToken = builder.Configuration["EmailSettings:ApiToken"]!;
-});
-builder.Services.AddSingleton<IResend>(sp =>
-{
-    var httpClientFactory = sp.GetRequiredService<IHttpClientFactory>();
-    var options = sp.GetRequiredService<IOptions<ResendClientOptions>>();
-    var httpClient = httpClientFactory.CreateClient("ResendClient");
-    return new ResendClient(new OptionsSnapshotAdapter<ResendClientOptions>(options),  httpClient);
-});
-builder.Services.AddSingleton<EmailTemplateService>();
+builder.Services.Configure<ResendClientOptions>(o =>
+    o.ApiToken = builder.Configuration["EmailSettings:ApiToken"]!);
+builder.Services.AddHttpClient<ResendClient>();
+builder.Services.AddTransient<IResend, ResendClient>();
+builder.Services.AddSingleton<IEmailTemplateService, EmailTemplateService>();
 builder.Services.AddTransient<IEmailService, ResendEmailService>();
 builder.Services.AddTransient<IEmailSender<User>, IdentityEmailSender>();
+
+builder.Services.Configure<FacturaPlanSettings>(
+    builder.Configuration.GetSection("FacturaPlan"));
+
+builder.Services.AddHttpClient<IBillingFacade, FacturaPlanBillingFacade>((sp, client) =>
+{
+    var settings = sp.GetRequiredService<IOptions<FacturaPlanSettings>>().Value;
+    client.BaseAddress = new Uri(settings.BaseUrl);
+});
+
+builder.Services.AddSingleton<FacturaPlanRequestMapper>();
 
 builder.Services.AddScoped<IUserAccessor, UserAccessor>();
 builder.Services.AddScoped<IImageService, ImageService>();

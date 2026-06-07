@@ -1,4 +1,6 @@
 using Application.IntegrationEvents.SupportTicketEvents;
+using Application.Interfaces.Services;
+using Application.Notifications.Requests;
 using Infrastructure.Messaging.Consumers.SupportTicketConsumers;
 using MassTransit;
 using Microsoft.EntityFrameworkCore;
@@ -157,5 +159,39 @@ public class SupportTicketUpdatedConsumerTests
         ticket!.UserId.Should().Be("user-1");
         ticket.UserEmail.Should().Be("user@test.com");
         ticket.UserFullName.Should().Be("Test User");
+    }
+
+    // ── NEW: 5.9 anti-duplicate: SupportTicketUpdatedConsumer MUST NOT send email ──
+
+    [Fact]
+    public async Task Consume_NeverInvokesEmailService()
+    {
+        using var context = CreateInMemoryContext();
+        var ticketId = Guid.NewGuid().ToString();
+        context.SupportTickets.Add(CreateTicketReadModel(ticketId));
+        await context.SaveChangesAsync();
+
+        var logger = CreateLogger();
+        var emailService = new Mock<IEmailService>();
+        var consumer = new SupportTicketUpdatedConsumer(context, logger);
+
+        var @event = new SupportTicketUpdatedIntegrationEvent
+        {
+            TicketId = ticketId,
+            Category = "Other",
+            Status = "InProgress",
+            Subject = "New Subject",
+            Description = "New Description"
+        };
+
+        var contextMock = new Mock<ConsumeContext<SupportTicketUpdatedIntegrationEvent>>();
+        contextMock.Setup(c => c.Message).Returns(@event);
+        contextMock.Setup(c => c.CancellationToken).Returns(CancellationToken.None);
+
+        await consumer.Consume(contextMock.Object);
+
+        emailService.Verify(
+            e => e.SendAsync(It.IsAny<EmailRequest>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 }

@@ -1,9 +1,13 @@
+using System.Globalization;
+using System.Text.Json;
 using Application.Core.Validations;
+using Application.IntegrationEvents.BillingEvents;
 using Application.IntegrationEvents.OrderEvents;
 using Application.IntegrationEvents.ProductEvents;
 using Application.Interfaces.Publish;
 using Application.Interfaces.Repositories.WriteRepositories;
 using Application.Interfaces.Services;
+using Application.Notifications.Requests;
 using Application.Payment.Events;
 using Domain.OrderAggregate;
 using MediatR;
@@ -18,7 +22,8 @@ public class HandleStripeWebhookCommandHandler(
     IProductRepository productRepository,
     IUnitOfWork unitOfWork,
     IEventPublisher eventPublisher,
-    ILogger<HandleStripeWebhookCommandHandler> logger)
+    ILogger<HandleStripeWebhookCommandHandler> logger,
+    IEmailService emailService)
     : IRequestHandler<HandleStripeWebhookCommand, Result<Unit>>
 {
     public async Task<Result<Unit>> Handle(HandleStripeWebhookCommand request, CancellationToken cancellationToken)
@@ -67,7 +72,7 @@ public class HandleStripeWebhookCommandHandler(
         }
 
         order.OrderStatus = OrderStatus.PaymentFailed;
-        
+
         await eventPublisher.PublishEventAsync(new OrderStatusChangedIntegrationEvent
         {
             OrderId = order.Id,
@@ -99,7 +104,53 @@ public class HandleStripeWebhookCommandHandler(
             NewStatus = order.OrderStatus.ToString()
         }, cancellationToken);
 
+        if (order.OrderStatus == OrderStatus.PaymentRecieved)
+        {
+            await eventPublisher.PublishEventAsync(new OrderBillingRequestedIntegrationEvent
+            {
+                OrderId = order.Id,
+                BuyerEmail = order.BuyerEmail,
+                Subtotal = order.Subtotal,
+                DeliveryFee = order.DeliveryFee,
+                Total = order.GetTotal(),
+                PaymentIntentId = order.PaymentIntentId,
+                BillingName = order.BillingAddress?.Name,
+                BillingLine1 = order.BillingAddress?.Line1,
+                BillingLine2 = order.BillingAddress?.Line2,
+                BillingCity = order.BillingAddress?.City,
+                BillingState = order.BillingAddress?.State,
+                BillingPostalCode = order.BillingAddress?.PostalCode,
+                BillingCountry = order.BillingAddress?.Country,
+                OrderItems = JsonSerializer.Serialize(order.OrderItems.Select(item => new
+                {
+                    item.ItemOrdered.Name,
+                    item.ItemOrdered.ProductId,
+                    item.Price,
+                    item.Quantity
+                })),
+                OccurredAt = DateTime.UtcNow
+            }, cancellationToken);
+        }
+
         await unitOfWork.CompleteAsync(cancellationToken);
+
+        try
+        {
+            var emailRequest = new PaymentConfirmedEmailRequest
+            {
+                ToEmail = order.BuyerEmail,
+                ToName = order.BillingAddress?.Name ?? order.BuyerEmail,
+                OrderNumber = order.Id,
+                TotalAmount = order.GetTotal()
+            };
+            await emailService.SendAsync(emailRequest, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex,
+                "Failed to send PaymentConfirmed email for order {OrderId}",
+                order.Id);
+        }
     }
     #endregion
 }
