@@ -1,4 +1,6 @@
 using Application.IntegrationEvents.SupportTicketEvents;
+using Application.Interfaces.Services;
+using Application.Notifications.Requests;
 using MassTransit;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -7,7 +9,10 @@ using Persistence.ReadModels;
 
 namespace Infrastructure.Messaging.Consumers.SupportTicketConsumers;
 
-public class SupportTicketCreatedConsumer(ReadDbContext readContext, ILogger<SupportTicketCreatedConsumer> logger)
+public class SupportTicketCreatedConsumer(
+    ReadDbContext readContext,
+    ILogger<SupportTicketCreatedConsumer> logger,
+    IEmailService emailService)
     : IConsumer<SupportTicketCreatedIntegrationEvent>
 {
     public async Task Consume(ConsumeContext<SupportTicketCreatedIntegrationEvent> context)
@@ -41,5 +46,25 @@ public class SupportTicketCreatedConsumer(ReadDbContext readContext, ILogger<Sup
         readContext.SupportTickets.Add(readModel);
         await readContext.SaveChangesAsync(context.CancellationToken);
         logger.LogInformation("SupportTicket with id {TicketId} has been added", message.TicketId);
+
+        try
+        {
+            var emailRequest = new SupportTicketCreatedEmailRequest
+            {
+                ToEmail = message.UserEmail,
+                ToName = message.UserFullName,
+                OrderNumber = message.TicketId,
+                Subject = message.Subject
+            };
+            await emailService.SendAsync(emailRequest, context.CancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex,
+                "Error sending {EmailType} email to {Email} for ticket {TicketId}",
+                "SupportTicketCreated",
+                message.UserEmail,
+                message.TicketId);
+        }
     }
 }

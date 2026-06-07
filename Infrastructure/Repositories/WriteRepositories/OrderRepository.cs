@@ -16,6 +16,7 @@ public class OrderRepository(WriteDbContext context) : IOrderRepository
     {
         return await context.Orders
             .Include(x => x.OrderItems)
+            .Include(x => x.BillingAddress)
             .FirstOrDefaultAsync(x => x.PaymentIntentId == paymentIntentId, cancellationToken);
     }
 

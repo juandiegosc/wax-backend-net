@@ -1,6 +1,5 @@
 using Application.Interfaces.Services;
 using Application.Notifications.Requests;
-using Infrastructure.Email.EmailTemplates;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Resend;
@@ -10,36 +9,37 @@ namespace Infrastructure.Email.Services;
 public class ResendEmailService(
     IResend resend,
     IOptions<EmailSettings> settings,
-    EmailTemplateService templateService,
+    IEmailTemplateService templateService,
     ILogger<ResendEmailService> logger) : IEmailService
 {
     private readonly EmailSettings _settings = settings.Value;
 
     public async Task SendAsync(EmailRequest request, CancellationToken cancellationToken = default)
     {
-            var (subject, htmlBody) = templateService.GetTemplate(request);
-            
-            var message = new EmailMessage
-            {
-                From = $"{_settings.FromName} <{_settings.FromEmail}>",
-                Subject = subject,
-                HtmlBody = htmlBody
-            };
-            message.To.Add(request.ToEmail);
+        var (subject, htmlBody) = templateService.Render(request);
 
-            var sendEmail = await resend.EmailSendAsync(message, cancellationToken);
+        var message = new EmailMessage
+        {
+            From = $"{_settings.FromName} <{_settings.FromEmail}>",
+            Subject = subject,
+            HtmlBody = htmlBody
+        };
+        message.To.Add(request.ToEmail);
 
-            if (!sendEmail.Success)
-            {
-                logger.LogError(
-                "Error enviando email {EmailType} a {Email}", 
-                request.EmailType, 
+        var sendEmail = await resend.EmailSendAsync(message, cancellationToken);
+
+        if (!sendEmail.Success)
+        {
+            logger.LogError(
+                "Error enviando email {EmailType} a {Email}",
+                request.EmailType,
                 request.ToEmail);
-            }
-            
-            logger.LogInformation(
-                "Email {EmailType} enviado a {Email}", 
-                request.EmailType, 
-                request.ToEmail);
+            return;
+        }
+
+        logger.LogInformation(
+            "Email {EmailType} enviado a {Email}",
+            request.EmailType,
+            request.ToEmail);
     }
 }

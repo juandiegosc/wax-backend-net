@@ -161,4 +161,22 @@ public class OrderRepositoryTests
         result.Should().NotBeNull();
         result!.OrderItems.Should().HaveCount(1);
     }
+
+    [Fact]
+    public async Task GetByPaymentIntentIdAsync_IncludesBillingAddress()
+    {
+        using var context = CreateInMemoryContext();
+        var paymentIntentId = "pi_billing_test";
+        var order = CreateOrder(paymentIntentId: paymentIntentId);
+        context.Orders.Add(order);
+        await context.SaveChangesAsync();
+
+        var repository = new OrderRepository(context);
+
+        var result = await repository.GetByPaymentIntentIdAsync(paymentIntentId);
+
+        result.Should().NotBeNull();
+        result!.BillingAddress.Should().NotBeNull();
+        result.BillingAddress.Name.Should().Be("John Doe");
+    }
 }
