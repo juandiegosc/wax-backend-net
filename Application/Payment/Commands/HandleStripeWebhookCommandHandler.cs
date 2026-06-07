@@ -1,5 +1,7 @@
 using System.Globalization;
+using System.Text.Json;
 using Application.Core.Validations;
+using Application.IntegrationEvents.BillingEvents;
 using Application.IntegrationEvents.OrderEvents;
 using Application.IntegrationEvents.ProductEvents;
 using Application.Interfaces.Publish;
@@ -101,6 +103,34 @@ public class HandleStripeWebhookCommandHandler(
             OrderId = order.Id,
             NewStatus = order.OrderStatus.ToString()
         }, cancellationToken);
+
+        if (order.OrderStatus == OrderStatus.PaymentRecieved)
+        {
+            await eventPublisher.PublishEventAsync(new OrderBillingRequestedIntegrationEvent
+            {
+                OrderId = order.Id,
+                BuyerEmail = order.BuyerEmail,
+                Subtotal = order.Subtotal,
+                DeliveryFee = order.DeliveryFee,
+                Total = order.GetTotal(),
+                PaymentIntentId = order.PaymentIntentId,
+                BillingName = order.BillingAddress?.Name,
+                BillingLine1 = order.BillingAddress?.Line1,
+                BillingLine2 = order.BillingAddress?.Line2,
+                BillingCity = order.BillingAddress?.City,
+                BillingState = order.BillingAddress?.State,
+                BillingPostalCode = order.BillingAddress?.PostalCode,
+                BillingCountry = order.BillingAddress?.Country,
+                OrderItems = JsonSerializer.Serialize(order.OrderItems.Select(item => new
+                {
+                    item.ItemOrdered.Name,
+                    item.ItemOrdered.ProductId,
+                    item.Price,
+                    item.Quantity
+                })),
+                OccurredAt = DateTime.UtcNow
+            }, cancellationToken);
+        }
 
         await unitOfWork.CompleteAsync(cancellationToken);
 

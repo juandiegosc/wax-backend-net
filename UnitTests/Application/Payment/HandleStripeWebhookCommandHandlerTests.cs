@@ -1,3 +1,4 @@
+using Application.IntegrationEvents.BillingEvents;
 using Application.IntegrationEvents.OrderEvents;
 using Application.IntegrationEvents.ProductEvents;
 using Application.Interfaces.Publish;
@@ -453,6 +454,68 @@ public class HandleStripeWebhookCommandHandlerTests
 
         _emailService.Verify(
             e => e.SendAsync(It.IsAny<PaymentConfirmedEmailRequest>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task HandlePaymentSucceeded_PublishesOrderBillingRequestedIntegrationEvent_WhenPaymentRecieved()
+    {
+        var order = OrderFixtures.CreateOrder(subtotal: 5000, deliveryFee: 500);
+        var stripeEvent = new StripeEventResult(
+            Type: "payment_intent.succeeded",
+            Status: "succeeded",
+            IntentId: order.PaymentIntentId,
+            Amount: order.GetTotal());
+
+        _paymentService
+            .Setup(p => p.ConstructStripeEvent(It.IsAny<string>(), It.IsAny<string>()))
+            .Returns(stripeEvent);
+
+        _orderRepo
+            .Setup(r => r.GetByPaymentIntentIdAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(order);
+
+        _basketRepo
+            .Setup(r => r.GetBasketWithItemsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((DomainBasket?)null);
+
+        await _handler.Handle(CreateCommand(), CancellationToken.None);
+
+        _eventPublisher.Verify(
+            e => e.PublishEventAsync(
+                It.IsAny<OrderBillingRequestedIntegrationEvent>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task HandlePaymentSucceeded_DoesNotPublishOrderBillingRequestedIntegrationEvent_WhenPaymentMismatch()
+    {
+        var order = OrderFixtures.CreateOrder(subtotal: 5000, deliveryFee: 500);
+        var stripeEvent = new StripeEventResult(
+            Type: "payment_intent.succeeded",
+            Status: "succeeded",
+            IntentId: order.PaymentIntentId,
+            Amount: 9999); // mismatch
+
+        _paymentService
+            .Setup(p => p.ConstructStripeEvent(It.IsAny<string>(), It.IsAny<string>()))
+            .Returns(stripeEvent);
+
+        _orderRepo
+            .Setup(r => r.GetByPaymentIntentIdAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(order);
+
+        _basketRepo
+            .Setup(r => r.GetBasketWithItemsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((DomainBasket?)null);
+
+        await _handler.Handle(CreateCommand(), CancellationToken.None);
+
+        _eventPublisher.Verify(
+            e => e.PublishEventAsync(
+                It.IsAny<OrderBillingRequestedIntegrationEvent>(),
+                It.IsAny<CancellationToken>()),
             Times.Never);
     }
 

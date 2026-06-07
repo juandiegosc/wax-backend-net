@@ -14,6 +14,7 @@ using Application.Reports.Validators;
 using Domain.Entities;
 using Domain.Enumerators;
 using FluentValidation;
+using Infrastructure.Billing;
 using Infrastructure.Cookies;
 using Infrastructure.Email;
 using Infrastructure.Email.EmailTemplates;
@@ -111,6 +112,17 @@ builder.Services.AddTransient<IResend, ResendClient>();
 builder.Services.AddSingleton<IEmailTemplateService, EmailTemplateService>();
 builder.Services.AddTransient<IEmailService, ResendEmailService>();
 builder.Services.AddTransient<IEmailSender<User>, IdentityEmailSender>();
+
+builder.Services.Configure<FacturaPlanSettings>(
+    builder.Configuration.GetSection("FacturaPlan"));
+
+builder.Services.AddHttpClient<IBillingFacade, FacturaPlanBillingFacade>((sp, client) =>
+{
+    var settings = sp.GetRequiredService<IOptions<FacturaPlanSettings>>().Value;
+    client.BaseAddress = new Uri(settings.BaseUrl);
+});
+
+builder.Services.AddSingleton<FacturaPlanRequestMapper>();
 
 builder.Services.AddScoped<IUserAccessor, UserAccessor>();
 builder.Services.AddScoped<IImageService, ImageService>();

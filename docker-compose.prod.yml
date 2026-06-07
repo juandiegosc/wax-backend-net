@@ -33,6 +33,13 @@ services:
       EmailSettings__BaseUrl: "${EMAIL_BASE_URL}"
       StripeSettings__SecretKey: "${STRIPE_SECRET_KEY}"
       StripeSettings__WebhookSecret: "${STRIPE_WEBHOOK_SECRET}"
+      FacturaPlan__BaseUrl: "${FACTURAPLAN_BASE_URL}"
+      FacturaPlan__ApiKey: "${FACTURAPLAN_API_KEY}"
+      FacturaPlan__TaxpayerRuc: "${FACTURAPLAN_TAXPAYER_RUC}"
+      FacturaPlan__Establishment: "${FACTURAPLAN_ESTABLISHMENT}"
+      FacturaPlan__EmissionPoint: "${FACTURAPLAN_EMISSION_POINT}"
+      FacturaPlan__DefaultPaymentMethod: "${FACTURAPLAN_DEFAULT_PAYMENT_METHOD}"
+      FacturaPlan__TaxRate: "${FACTURAPLAN_TAX_RATE}"
     expose:
       - "8080"
     networks:
