@@ -2,22 +2,25 @@ name: wax-pipeline
 
 on:
   push:
-    branches:
-      - main
-      - develop
+    branches: [main, develop]
   pull_request:
-    branches:
-      - main
-      - develop
+    branches: [main, develop]
+
+# Evita que dos pushes seguidos a main desplieguen en paralelo
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   DOTNET_VERSION: "10.0.x"
   SOLUTION_PATH: "wax-backend-net.sln"
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/wax-backend-net
 
 jobs:
   ci:
     name: Build, Test & Analyze
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -35,8 +38,7 @@ jobs:
         with:
           path: ~/.nuget/packages
           key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
-          restore-keys: |
-            ${{ runner.os }}-nuget-
+          restore-keys: ${{ runner.os }}-nuget-
 
       - name: Cache SonarCloud packages
         uses: actions/cache@v4
@@ -58,21 +60,33 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
-          dotnet-sonarscanner begin \
-            /k:"JuanDiego-sc_wax-backend-net" \
-            /o:"juandiego-sc" \
-            /d:sonar.token="${{ secrets.SONAR_TOKEN }}" \
-            /d:sonar.host.url="https://sonarcloud.io" \
-            /d:sonar.cs.opencover.reportsPaths="coverage/**/coverage.opencover.xml" \
-            /d:sonar.exclusions="**/Migrations/**,API/Documentation/**" \
-            /d:sonar.coverage.exclusions="**/Migrations/**,**/*Tests*/**,**/Program.cs,API/Documentation/**" \
-            /d:sonar.scanner.scanAll=false
+          set -euo pipefail
+          ARGS=()
+          ARGS+=(/k:"JuanDiego-sc_wax-backend-net")
+          ARGS+=(/o:"juandiego-sc")
+          ARGS+=(/d:sonar.token="${SONAR_TOKEN}")
+          ARGS+=(/d:sonar.host.url="https://sonarcloud.io")
+          ARGS+=(/d:sonar.cs.opencover.reportsPaths="coverage/**/coverage.opencover.xml")
+          ARGS+=(/d:sonar.exclusions="**/Migrations/**,API/Documentation/**")
+          ARGS+=(/d:sonar.coverage.exclusions="**/Migrations/**,**/*Tests*/**,**/Program.cs,API/Documentation/**")
+          ARGS+=(/d:sonar.scanner.scanAll=false)
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            ARGS+=(/d:sonar.pullrequest.key="${{ github.event.pull_request.number }}")
+            ARGS+=(/d:sonar.pullrequest.branch="${{ github.head_ref }}")
+            ARGS+=(/d:sonar.pullrequest.base="${{ github.base_ref }}")
+          else
+            ARGS+=(/d:sonar.branch.name="${{ github.ref_name }}")
+          fi
+
+          dotnet-sonarscanner begin "${ARGS[@]}"
 
       - name: Build
         run: dotnet build ${{ env.SOLUTION_PATH }} --no-restore --configuration Release
 
       - name: Test
         run: |
+          set -euo pipefail
           dotnet test ${{ env.SOLUTION_PATH }} \
             --no-build \
             --configuration Release \
@@ -80,22 +94,25 @@ jobs:
             --results-directory ./coverage \
             -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover
 
-      - name: List coverage files
-        run: find ./coverage -type f
-
       - name: End Sonar analysis
+        if: always()
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: dotnet-sonarscanner end /d:sonar.token="${{ secrets.SONAR_TOKEN }}"
+        run: dotnet-sonarscanner end /d:sonar.token="${SONAR_TOKEN}"
 
   docker:
     name: Build & Push Image
     needs: ci
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
       packages: write
+      security-events: write
+    outputs:
+      image_tag: ${{ steps.meta.outputs.version }}
+      image_digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
 
@@ -113,12 +130,16 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/wax-backend-net
+          images: ${{ env.IMAGE_NAME }}
           tags: |
             type=sha,format=short
             type=raw,value=latest
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
 
       - name: Build & Push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -128,12 +149,30 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+
+      - name: Run Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          exit-code: 0
+
+      - name: Upload Trivy results to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
 
   deploy:
     name: Deploy to VPS
     needs: docker
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: SSH deploy
         uses: appleboy/ssh-action@v1.2.0
@@ -141,13 +180,62 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          envs: GITHUB_SHA
           script: |
-            set -e
+            set -euo pipefail
+
+            EXPECTED_SHA="${{ github.sha }}"
+            SHORT_SHA="sha-$(echo "$EXPECTED_SHA" | cut -c1-7)"
             cd /opt/wax
+
+            echo ">>> Sync repo to commit $EXPECTED_SHA"
             git fetch origin main
             git reset --hard origin/main
             git clean -fd
-            export IMAGE_TAG=sha-$(echo ${{ github.sha }} | cut -c1-7)
+            REPO_SHA=$(git rev-parse HEAD)
+            if [ "$REPO_SHA" != "$EXPECTED_SHA" ]; then
+              echo "ERROR: repo HEAD $REPO_SHA != expected $EXPECTED_SHA"
+              exit 1
+            fi
+
+            echo ">>> Snapshot previous image for rollback"
+            PREV_IMAGE=$(docker inspect wax-api-1 --format '{{.Image}}' 2>/dev/null || echo "")
+            echo "Previous image: $PREV_IMAGE"
+
+            echo ">>> Pull explicit image"
+            export IMAGE_TAG="$SHORT_SHA"
             docker compose -f docker-compose.prod.yml pull api
-            docker compose -f docker-compose.prod.yml up -d --remove-orphans
+
+            echo ">>> Recreate container"
+            docker compose -f docker-compose.prod.yml up -d \
+              --force-recreate --no-deps --remove-orphans api
+
+            echo ">>> Wait for healthcheck"
+            for i in $(seq 1 60); do
+              STATUS=$(docker inspect wax-api-1 --format '{{.State.Health.Status}}' 2>/dev/null || echo "missing")
+              if [ "$STATUS" = "healthy" ]; then
+                echo "Container healthy after ${i}s"
+                break
+              fi
+              if [ "$i" -eq 60 ]; then
+                echo "ERROR: container not healthy in 60s. Rolling back."
+                if [ -n "$PREV_IMAGE" ]; then
+                  docker tag "$PREV_IMAGE" "${{ env.IMAGE_NAME }}:rollback"
+                  export IMAGE_TAG="rollback"
+                  docker compose -f docker-compose.prod.yml up -d --force-recreate --no-deps api
+                fi
+                docker compose -f docker-compose.prod.yml logs --tail=120 api
+                exit 1
+              fi
+              sleep 1
+            done
+
+            echo ">>> Verify running revision matches expected"
+            RUNNING_SHA=$(docker inspect wax-api-1 --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
+            if [ "$RUNNING_SHA" != "$EXPECTED_SHA" ]; then
+              echo "ERROR: running revision $RUNNING_SHA != expected $EXPECTED_SHA"
+              exit 1
+            fi
+
+            echo ">>> Deploy successful. Revision: $RUNNING_SHA"
             docker image prune -f
