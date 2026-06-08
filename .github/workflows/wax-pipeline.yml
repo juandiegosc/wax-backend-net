@@ -6,7 +6,6 @@ on:
   pull_request:
     branches: [main, develop]
 
-# Evita que dos pushes seguidos a main desplieguen en paralelo
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
@@ -59,26 +58,30 @@ jobs:
       - name: Begin Sonar analysis
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD: ${{ github.head_ref }}
+          PR_BASE: ${{ github.base_ref }}
+          BRANCH_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          ARGS=()
-          ARGS+=(/k:"JuanDiego-sc_wax-backend-net")
-          ARGS+=(/o:"juandiego-sc")
-          ARGS+=(/d:sonar.token="${SONAR_TOKEN}")
-          ARGS+=(/d:sonar.host.url="https://sonarcloud.io")
-          ARGS+=(/d:sonar.cs.opencover.reportsPaths="coverage/**/coverage.opencover.xml")
-          ARGS+=(/d:sonar.exclusions="**/Migrations/**,API/Documentation/**")
-          ARGS+=(/d:sonar.coverage.exclusions="**/Migrations/**,**/*Tests*/**,**/Program.cs,API/Documentation/**")
-          ARGS+=(/d:sonar.scanner.scanAll=false)
-
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            ARGS+=(/d:sonar.pullrequest.key="${{ github.event.pull_request.number }}")
-            ARGS+=(/d:sonar.pullrequest.branch="${{ github.head_ref }}")
-            ARGS+=(/d:sonar.pullrequest.base="${{ github.base_ref }}")
+          ARGS=(
+            /k:"JuanDiego-sc_wax-backend-net"
+            /o:"juandiego-sc"
+            /d:sonar.token="${SONAR_TOKEN}"
+            /d:sonar.host.url="https://sonarcloud.io"
+            /d:sonar.cs.opencover.reportsPaths="coverage/**/coverage.opencover.xml"
+            /d:sonar.exclusions="**/Migrations/**,API/Documentation/**"
+            /d:sonar.coverage.exclusions="**/Migrations/**,**/*Tests*/**,**/Program.cs,API/Documentation/**"
+            /d:sonar.scanner.scanAll=false
+          )
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            ARGS+=(/d:sonar.pullrequest.key="${PR_NUMBER}")
+            ARGS+=(/d:sonar.pullrequest.branch="${PR_HEAD}")
+            ARGS+=(/d:sonar.pullrequest.base="${PR_BASE}")
           else
-            ARGS+=(/d:sonar.branch.name="${{ github.ref_name }}")
+            ARGS+=(/d:sonar.branch.name="${BRANCH_NAME}")
           fi
-
           dotnet-sonarscanner begin "${ARGS[@]}"
 
       - name: Build
@@ -110,9 +113,6 @@ jobs:
       contents: read
       packages: write
       security-events: write
-    outputs:
-      image_tag: ${{ steps.meta.outputs.version }}
-      image_digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
 
@@ -153,13 +153,13 @@ jobs:
           sbom: true
 
       - name: Run Trivy vulnerability scan
-          uses: aquasecurity/trivy-action@master
-          with:
-            image-ref: ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
-            format: sarif
-            output: trivy-results.sarif
-            severity: CRITICAL,HIGH
-            exit-code: 0
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          exit-code: '0'
 
       - name: Upload Trivy results to GitHub Security
         if: always()
@@ -176,15 +176,17 @@ jobs:
     steps:
       - name: SSH deploy
         uses: appleboy/ssh-action@v1.2.0
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          envs: GITHUB_SHA
+          envs: EXPECTED_SHA,IMAGE_NAME
           script: |
             set -euo pipefail
 
-            EXPECTED_SHA="${{ github.sha }}"
             SHORT_SHA="sha-$(echo "$EXPECTED_SHA" | cut -c1-7)"
             cd /opt/wax
 
@@ -211,24 +213,27 @@ jobs:
               --force-recreate --no-deps --remove-orphans api
 
             echo ">>> Wait for healthcheck"
+            HEALTHY=0
             for i in $(seq 1 60); do
               STATUS=$(docker inspect wax-api-1 --format '{{.State.Health.Status}}' 2>/dev/null || echo "missing")
               if [ "$STATUS" = "healthy" ]; then
                 echo "Container healthy after ${i}s"
+                HEALTHY=1
                 break
-              fi
-              if [ "$i" -eq 60 ]; then
-                echo "ERROR: container not healthy in 60s. Rolling back."
-                if [ -n "$PREV_IMAGE" ]; then
-                  docker tag "$PREV_IMAGE" "${{ env.IMAGE_NAME }}:rollback"
-                  export IMAGE_TAG="rollback"
-                  docker compose -f docker-compose.prod.yml up -d --force-recreate --no-deps api
-                fi
-                docker compose -f docker-compose.prod.yml logs --tail=120 api
-                exit 1
               fi
               sleep 1
             done
+
+            if [ "$HEALTHY" -ne 1 ]; then
+              echo "ERROR: container not healthy in 60s. Rolling back."
+              if [ -n "$PREV_IMAGE" ]; then
+                docker tag "$PREV_IMAGE" "${IMAGE_NAME}:rollback"
+                export IMAGE_TAG="rollback"
+                docker compose -f docker-compose.prod.yml up -d --force-recreate --no-deps api
+              fi
+              docker compose -f docker-compose.prod.yml logs --tail=120 api
+              exit 1
+            fi
 
             echo ">>> Verify running revision matches expected"
             RUNNING_SHA=$(docker inspect wax-api-1 --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')
