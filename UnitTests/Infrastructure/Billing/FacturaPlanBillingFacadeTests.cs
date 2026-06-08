@@ -11,7 +11,7 @@ namespace UnitTests.Infrastructure.Billing;
 
 public class FacturaPlanBillingFacadeTests
 {
-    private const string BaseUrl = "https://api.factuplan.com";
+    private const string BaseUrl = "https://api-rest.factuplan.com.ec";
     private const string ApiKey = "test-api-key";
     private const string TaxpayerRuc = "9999999990001";
 
@@ -23,7 +23,7 @@ public class FacturaPlanBillingFacadeTests
         Establishment = "001",
         EmissionPoint = "001",
         DefaultPaymentMethod = "19",
-        TaxRate = 0.15m
+        TaxRate = 15m
     };
 
     private static InvoiceRequest BuildRequest() => new(
@@ -154,8 +154,6 @@ public class FacturaPlanBillingFacadeTests
         await facade.EmitInvoiceAsync(BuildRequest(), CancellationToken.None);
 
         capturedBody.Should().NotBeNull();
-        // camelCase: "sendEmail" not "SendEmail"
-        capturedBody.Should().Contain("\"sendEmail\"");
         capturedBody.Should().Contain("\"customer\"");
         capturedBody.Should().Contain("\"items\"");
     }

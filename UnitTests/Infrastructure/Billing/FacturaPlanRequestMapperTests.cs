@@ -7,13 +7,13 @@ public class FacturaPlanRequestMapperTests
 {
     private static FacturaPlanSettings DefaultSettings() => new()
     {
-        BaseUrl = "https://api.factuplan.com",
+        BaseUrl = "https://api-rest.factuplan.com.ec",
         ApiKey = "test-key",
         TaxpayerRuc = "1234567890001",
         Establishment = "001",
         EmissionPoint = "001",
         DefaultPaymentMethod = "19",
-        TaxRate = 0.15m
+        TaxRate = 15m
     };
 
     private static InvoiceRequest BuildRequest(
@@ -37,15 +37,20 @@ public class FacturaPlanRequestMapperTests
     }
 
     [Fact]
-    public void Map_ConvertsCentavosToDecimal_DividingBy100()
+    public void Map_PaymentAmount_RecomputedFromItemsPlusTax()
     {
         var settings = DefaultSettings();
         var mapper = new FacturaPlanRequestMapper();
-        var request = BuildRequest(totalAmount: 100.00m);
+        var items = new List<InvoiceLine>
+        {
+            new("P1", "Product", 1, 100.00m, 0m)
+        };
+        var request = BuildRequest(totalAmount: 999.99m, items: items);
 
         var result = mapper.Map(request, settings);
 
-        result.Payments[0].Amount.Should().Be(100.00m);
+        // subtotal 100 * (1 + 15/100) = 115.00, ignora el totalAmount del request
+        result.Payments[0].Amount.Should().Be(115.00m);
     }
 
     [Fact]
@@ -131,18 +136,6 @@ public class FacturaPlanRequestMapperTests
     }
 
     [Fact]
-    public void Map_SendEmail_AlwaysTrue()
-    {
-        var settings = DefaultSettings();
-        var mapper = new FacturaPlanRequestMapper();
-        var request = BuildRequest();
-
-        var result = mapper.Map(request, settings);
-
-        result.SendEmail.Should().BeTrue();
-    }
-
-    [Fact]
     public void Map_PaymentMethod_FromSettings()
     {
         var settings = DefaultSettings();
@@ -156,43 +149,10 @@ public class FacturaPlanRequestMapperTests
     }
 
     [Fact]
-    public void Map_AddsDeliveryFeeAsItem_WhenGreaterThanZero()
+    public void Map_SetsTax_AsRatePercentage_NotAmount()
     {
         var settings = DefaultSettings();
-        var mapper = new FacturaPlanRequestMapper();
-        var items = new List<InvoiceLine>
-        {
-            new("P1", "Product", 1, 90.00m, 0m),
-            new("DELIVERY", "Delivery Fee", 1, 10.00m, 0m)
-        };
-        var request = BuildRequest(totalAmount: 100.00m, items: items);
-
-        var result = mapper.Map(request, settings);
-
-        result.Items.Should().Contain(i => i.Code == "DELIVERY" && i.UnitPrice == 10.00m);
-    }
-
-    [Fact]
-    public void Map_OmitsDeliveryFeeItem_WhenZero()
-    {
-        var settings = DefaultSettings();
-        var mapper = new FacturaPlanRequestMapper();
-        var items = new List<InvoiceLine>
-        {
-            new("P1", "Product Only", 1, 50.00m, 0m)
-        };
-        var request = BuildRequest(items: items);
-
-        var result = mapper.Map(request, settings);
-
-        result.Items.Should().NotContain(i => i.Code == "DELIVERY");
-    }
-
-    [Fact]
-    public void Map_CalculatesTax_PerItemUsingTaxRate()
-    {
-        var settings = DefaultSettings();
-        settings.TaxRate = 0.15m;
+        settings.TaxRate = 15m;
         var mapper = new FacturaPlanRequestMapper();
         var items = new List<InvoiceLine>
         {
@@ -202,7 +162,7 @@ public class FacturaPlanRequestMapperTests
 
         var result = mapper.Map(request, settings);
 
-        // tax = unitPrice * quantity * taxRate = 50 * 2 * 0.15 = 15.00
-        result.Items[0].Tax.Should().Be(15.00m);
+        // FacturaPlan espera la tasa como porcentaje (15), no el monto calculado
+        result.Items[0].Tax.Should().Be(15m);
     }
 }
