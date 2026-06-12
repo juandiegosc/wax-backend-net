@@ -107,6 +107,9 @@ builder.Services.AddOptions();
 builder.Services.Configure<EmailSettings>(builder.Configuration.GetSection("EmailSettings"));
 builder.Services.Configure<ResendClientOptions>(o =>
     o.ApiToken = builder.Configuration["EmailSettings:ApiToken"]!);
+
+builder.Services.AddSingleton<IOptionsSnapshot<ResendClientOptions>,
+    StaticOptionsSnapshot<ResendClientOptions>>();
 builder.Services.AddHttpClient<ResendClient>();
 builder.Services.AddTransient<IResend, ResendClient>();
 builder.Services.AddSingleton<IEmailTemplateService, EmailTemplateService>();
