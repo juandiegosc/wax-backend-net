@@ -61,13 +61,33 @@ public class DbInitializer(
     {
         if (!await context.QuotationRules.AnyAsync())
         {
-            context.QuotationRules.AddRange(
-                new QuotationRule { Key = "BASE_COST", Value = 5000m, Description = "Costo base en centavos" },
-                new QuotationRule { Key = "MARGIN_MULTIPLIER", Value = 1.6m, Description = "Multiplicador de margen" },
-                new QuotationRule { Key = "DEFAULT_DEPTH_CM", Value = 5m, Description = "Profundidad por defecto" },
-                new QuotationRule { Key = "MATERIAL_default", Value = 2m, Description = "Costo en centavos por cm3" }
-                );
+            var base_cost = new QuotationRule { Key = "BASE_COST", Value = 5000m, Description = "Costo base en centavos" };
+            base_cost.MarkAsDefault();
+            var margin = new QuotationRule { Key = "MARGIN_MULTIPLIER", Value = 1.6m, Description = "Multiplicador de margen" };
+            margin.MarkAsDefault();
+            var depth = new QuotationRule { Key = "DEFAULT_DEPTH_CM", Value = 5m, Description = "Profundidad por defecto" };
+            depth.MarkAsDefault();
+            var material = new QuotationRule { Key = "MATERIAL_default", Value = 2m, Description = "Costo en centavos por cm3" };
+            material.MarkAsDefault();
+
+            context.QuotationRules.AddRange(base_cost, margin, depth, material);
             await context.SaveChangesAsync();
+        }
+        else
+        {
+            // Backfill idempotente: marcar las reglas semilla que aun no tengan IsDefault = true.
+            var defaultKeys = new[] { "BASE_COST", "MARGIN_MULTIPLIER", "DEFAULT_DEPTH_CM", "MATERIAL_default" };
+            var rulesWithoutDefault = await context.QuotationRules
+                .Where(r => defaultKeys.Contains(r.Key) && !r.IsDefault)
+                .ToListAsync();
+
+            if (rulesWithoutDefault.Count > 0)
+            {
+                foreach (var rule in rulesWithoutDefault)
+                    rule.MarkAsDefault();
+
+                await context.SaveChangesAsync();
+            }
         }
     }
 }

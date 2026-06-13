@@ -107,6 +107,9 @@ builder.Services.AddOptions();
 builder.Services.Configure<EmailSettings>(builder.Configuration.GetSection("EmailSettings"));
 builder.Services.Configure<ResendClientOptions>(o =>
     o.ApiToken = builder.Configuration["EmailSettings:ApiToken"]!);
+
+builder.Services.AddSingleton<IOptionsSnapshot<ResendClientOptions>,
+    StaticOptionsSnapshot<ResendClientOptions>>();
 builder.Services.AddHttpClient<ResendClient>();
 builder.Services.AddTransient<IResend, ResendClient>();
 builder.Services.AddSingleton<IEmailTemplateService, EmailTemplateService>();
@@ -133,7 +136,8 @@ builder.Services.AddScoped<IProductRepository, ProductRepository>();
 builder.Services.AddScoped<IBasketRepository, BasketRepository>();
 builder.Services.AddScoped<IOrderRepository, OrderRepository>();
 builder.Services.AddScoped<ISupportTicketRepository, SupportTicketRepository>();
-builder.Services.AddScoped<ICommentRepository, CommentRepository>(); 
+builder.Services.AddScoped<ICommentRepository, CommentRepository>();
+builder.Services.AddScoped<IQuotationRuleRepository, QuotationRuleRepository>();
 builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
 
 builder.Services.AddScoped<IProductReadRepository, ProductReadRepository>();
@@ -157,6 +161,11 @@ builder.Services.AddScoped<IValidator<GetOrdersByDateReportQuery>, GetOrdersByDa
 builder.Services.AddScoped<IValidator<GetTopBuyersReportQuery>, GetTopBuyersReportValidator>();
 builder.Services.AddScoped<IValidator<GetProductsStockReportQuery>, GetProductsStockReportValidator>();
 builder.Services.AddScoped<IValidator<GetSupportByDateReportQuery>, GetSupportByDateReportValidator>();
+
+// Validators del modulo de administracion de reglas de cotizacion.
+builder.Services.AddScoped<IValidator<Application.Quotation.Commands.CreateQuotationRuleCommand>, Application.Quotation.Validators.CreateQuotationRuleCommandValidator>();
+builder.Services.AddScoped<IValidator<Application.Quotation.Commands.UpdateQuotationRuleCommand>, Application.Quotation.Validators.UpdateQuotationRuleCommandValidator>();
+builder.Services.AddScoped<IValidator<Application.Quotation.Commands.DeleteQuotationRuleCommand>, Application.Quotation.Validators.DeleteQuotationRuleCommandValidator>();
 
 builder.Services.AddIdentityApiEndpoints<User>(options =>
 {

@@ -1,5 +1,7 @@
+using Application.Billing.DTOs;
 using Application.Reports.DTOs;
 using Application.Reports.Queries;
+using Application.Reports.Queries.Invoices;
 using Domain.Entities;
 using Domain.Enumerators;
 using Microsoft.AspNetCore.Authorization;
@@ -119,6 +121,27 @@ public class ReportsController(UserManager<User> userManager) : BaseApiControlle
         [FromQuery] DateTime to)
         => await HandleQuery<List<SupportByDateReportDto>>(
             new GetSupportByDateReportQuery { From = from, To = to });
+
+    // -------------------------------------------------------------------------
+    // Facturas (FacturaPlan pass-through)
+    // -------------------------------------------------------------------------
+
+    [HttpGet("invoices")]
+    [ProducesResponseType(typeof(InvoiceListResult), 200)]
+    [ProducesResponseType(401)]
+    [ProducesResponseType(403)]
+    [ProducesResponseType(502)]
+    public async Task<ActionResult> ListInvoices()
+        => await HandleQuery<InvoiceListResult>(new GetInvoicesListQuery());
+
+    [HttpGet("invoices/{id}")]
+    [ProducesResponseType(typeof(InvoiceDetail), 200)]
+    [ProducesResponseType(401)]
+    [ProducesResponseType(403)]
+    [ProducesResponseType(404)]
+    [ProducesResponseType(502)]
+    public async Task<ActionResult> GetInvoice(string id)
+        => await HandleQuery<InvoiceDetail>(new GetInvoiceByIdQuery(id));
 
     // -------------------------------------------------------------------------
     // Usuarios

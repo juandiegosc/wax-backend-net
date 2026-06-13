@@ -1,0 +1,348 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "WAX API - QuotationRules (Administracion de Reglas de Cotizacion)",
+    "description": "Modulo de administracion CRUD para las reglas de cotizacion del motor de precios.\n\n## Guia de uso\n\nTodos los endpoints viven bajo el prefijo `/api/QuotationRules` y requieren el rol `Admin` (cookie de ASP.NET Identity).\n\nConvenciones:\n- Autorizacion: TODOS los endpoints exigen el rol `Admin`. Un usuario no autenticado recibe 401; autenticado sin rol Admin recibe 403.\n- Soft delete: el endpoint DELETE no elimina fisicamente la fila sino que establece `isActive = false`.\n- Reglas predeterminadas (`isDefault = true`): no pueden eliminarse (retorna 400). Si pueden actualizarse.\n- Cache: cada mutacion invalida el cache de reglas de cotizacion (`IQuotationRulesCache`) para que el motor use valores frescos.\n- El campo `key` es inmutable: no se puede modificar via PUT. Es el contrato con el motor de cotizacion.",
+    "version": "1.0.0",
+    "contact": {
+      "name": "WAX Backend Team"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://localhost:5005",
+      "description": "Local development"
+    }
+  ],
+  "tags": [
+    {
+      "name": "QuotationRules",
+      "description": "CRUD administrativo de reglas de cotizacion. Solo accesible para usuarios con rol Admin."
+    }
+  ],
+  "paths": {
+    "/api/QuotationRules": {
+      "get": {
+        "tags": ["QuotationRules"],
+        "summary": "Listar reglas de cotizacion",
+        "description": "Devuelve todas las reglas de cotizacion. Opcionalmente filtradas por estado activo via el parametro `activeOnly`.",
+        "operationId": "QuotationRules_GetAll",
+        "parameters": [
+          {
+            "name": "activeOnly",
+            "in": "query",
+            "description": "Si se especifica `true`, solo devuelve reglas activas. Si se omite o se envia `null`, devuelve todas.",
+            "required": false,
+            "schema": { "type": "boolean", "nullable": true }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Lista de reglas de cotizacion",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/QuotationRuleDto" }
+                },
+                "example": [
+                  {
+                    "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                    "key": "BASE_COST",
+                    "value": 5000.0,
+                    "description": "Costo base en centavos",
+                    "isActive": true,
+                    "isDefault": true
+                  },
+                  {
+                    "id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+                    "key": "MARGIN_MULTIPLIER",
+                    "value": 1.6,
+                    "description": "Multiplicador de margen",
+                    "isActive": true,
+                    "isDefault": true
+                  }
+                ]
+              }
+            }
+          },
+          "401": { "description": "Usuario no autenticado" },
+          "403": { "description": "El usuario no tiene el rol Admin" }
+        },
+        "security": [{ "cookieAuth": [] }]
+      },
+      "post": {
+        "tags": ["QuotationRules"],
+        "summary": "Crear regla de cotizacion",
+        "description": "Crea una nueva regla de cotizacion. El campo `key` debe ser unico y no puede contener espacios al inicio o al final. Las reglas creadas via API tienen `isDefault = false` y `isActive = true` por defecto.",
+        "operationId": "QuotationRules_Create",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateQuotationRuleDto" },
+              "example": {
+                "key": "CUSTOM_FEE",
+                "value": 150.0,
+                "description": "Tarifa adicional personalizada"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Regla creada correctamente",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/QuotationRuleDto" },
+                "example": {
+                  "id": "c3d4e5f6-a7b8-9012-cdef-123456789012",
+                  "key": "CUSTOM_FEE",
+                  "value": 150.0,
+                  "description": "Tarifa adicional personalizada",
+                  "isActive": true,
+                  "isDefault": false
+                }
+              }
+            }
+          },
+          "400": { "description": "Datos invalidos (key duplicada, value <= 0, descripcion muy larga, etc.)" },
+          "401": { "description": "Usuario no autenticado" },
+          "403": { "description": "El usuario no tiene el rol Admin" }
+        },
+        "security": [{ "cookieAuth": [] }]
+      }
+    },
+    "/api/QuotationRules/{id}": {
+      "get": {
+        "tags": ["QuotationRules"],
+        "summary": "Obtener regla de cotizacion por ID",
+        "description": "Devuelve una regla de cotizacion especifica por su identificador.",
+        "operationId": "QuotationRules_GetById",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Identificador unico de la regla",
+            "required": true,
+            "schema": { "type": "string" },
+            "example": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Regla encontrada",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/QuotationRuleDto" },
+                "example": {
+                  "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                  "key": "BASE_COST",
+                  "value": 5000.0,
+                  "description": "Costo base en centavos",
+                  "isActive": true,
+                  "isDefault": true
+                }
+              }
+            }
+          },
+          "401": { "description": "Usuario no autenticado" },
+          "403": { "description": "El usuario no tiene el rol Admin" },
+          "404": { "description": "Regla no encontrada" }
+        },
+        "security": [{ "cookieAuth": [] }]
+      },
+      "put": {
+        "tags": ["QuotationRules"],
+        "summary": "Actualizar regla de cotizacion",
+        "description": "Actualiza el valor, descripcion y estado activo de una regla existente. El campo `key` es inmutable y no se puede modificar. Las reglas predeterminadas (`isDefault = true`) pueden actualizarse.",
+        "operationId": "QuotationRules_Update",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Identificador unico de la regla a actualizar",
+            "required": true,
+            "schema": { "type": "string" },
+            "example": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/UpdateQuotationRuleDto" },
+              "example": {
+                "value": 6000.0,
+                "description": "Costo base actualizado",
+                "isActive": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Regla actualizada correctamente",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/QuotationRuleDto" },
+                "example": {
+                  "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+                  "key": "BASE_COST",
+                  "value": 6000.0,
+                  "description": "Costo base actualizado",
+                  "isActive": true,
+                  "isDefault": true
+                }
+              }
+            }
+          },
+          "400": { "description": "Datos invalidos (value <= 0, descripcion muy larga, etc.)" },
+          "401": { "description": "Usuario no autenticado" },
+          "403": { "description": "El usuario no tiene el rol Admin" },
+          "404": { "description": "Regla no encontrada" }
+        },
+        "security": [{ "cookieAuth": [] }]
+      },
+      "delete": {
+        "tags": ["QuotationRules"],
+        "summary": "Eliminar (desactivar) regla de cotizacion",
+        "description": "Realiza un soft-delete estableciendo `isActive = false`. Las reglas predeterminadas (`isDefault = true`) no pueden eliminarse y retornan 400.",
+        "operationId": "QuotationRules_Delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Identificador unico de la regla a eliminar",
+            "required": true,
+            "schema": { "type": "string" },
+            "example": "c3d4e5f6-a7b8-9012-cdef-123456789012"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Regla desactivada correctamente",
+            "content": {
+              "application/json": {
+                "schema": { "type": "boolean" },
+                "example": true
+              }
+            }
+          },
+          "400": { "description": "No se puede eliminar una regla predeterminada del sistema" },
+          "401": { "description": "Usuario no autenticado" },
+          "403": { "description": "El usuario no tiene el rol Admin" },
+          "404": { "description": "Regla no encontrada" }
+        },
+        "security": [{ "cookieAuth": [] }]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "QuotationRuleDto": {
+        "type": "object",
+        "description": "Representacion completa de una regla de cotizacion",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Identificador unico (GUID como string)",
+            "example": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+          },
+          "key": {
+            "type": "string",
+            "description": "Clave unica inmutable que identifica la regla en el motor de cotizacion",
+            "example": "BASE_COST"
+          },
+          "value": {
+            "type": "number",
+            "format": "decimal",
+            "description": "Valor numerico de la regla (siempre mayor a cero)",
+            "example": 5000.0
+          },
+          "description": {
+            "type": "string",
+            "nullable": true,
+            "description": "Descripcion opcional de la regla (max 500 caracteres)",
+            "example": "Costo base en centavos"
+          },
+          "isActive": {
+            "type": "boolean",
+            "description": "Indica si la regla esta activa. Las reglas inactivas son ignoradas por el motor.",
+            "example": true
+          },
+          "isDefault": {
+            "type": "boolean",
+            "description": "Indica si la regla es una regla predeterminada del sistema. Las reglas predeterminadas no pueden eliminarse.",
+            "example": true
+          }
+        },
+        "required": ["id", "key", "value", "isActive", "isDefault"]
+      },
+      "CreateQuotationRuleDto": {
+        "type": "object",
+        "description": "Datos requeridos para crear una nueva regla de cotizacion",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "Clave unica de la regla. Sin espacios al inicio o al final. Max 100 caracteres.",
+            "maxLength": 100,
+            "example": "CUSTOM_FEE"
+          },
+          "value": {
+            "type": "number",
+            "format": "decimal",
+            "description": "Valor numerico de la regla. Debe ser mayor a cero.",
+            "example": 150.0
+          },
+          "description": {
+            "type": "string",
+            "nullable": true,
+            "description": "Descripcion opcional. Max 500 caracteres.",
+            "maxLength": 500,
+            "example": "Tarifa adicional personalizada"
+          }
+        },
+        "required": ["key", "value"]
+      },
+      "UpdateQuotationRuleDto": {
+        "type": "object",
+        "description": "Datos para actualizar una regla existente. La clave (key) e IsDefault no son modificables.",
+        "properties": {
+          "value": {
+            "type": "number",
+            "format": "decimal",
+            "description": "Nuevo valor numerico de la regla. Debe ser mayor a cero.",
+            "example": 6000.0
+          },
+          "description": {
+            "type": "string",
+            "nullable": true,
+            "description": "Nueva descripcion. Max 500 caracteres.",
+            "maxLength": 500,
+            "example": "Costo base actualizado"
+          },
+          "isActive": {
+            "type": "boolean",
+            "description": "Estado activo de la regla. Permite reactivar una regla desactivada.",
+            "example": true
+          }
+        },
+        "required": ["value", "isActive"]
+      },
+      "Error": {
+        "type": "string",
+        "description": "Mensaje de error retornado en respuestas 400",
+        "example": "Ya existe una regla con la clave 'BASE_COST'."
+      }
+    },
+    "securitySchemes": {
+      "cookieAuth": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": ".AspNetCore.Identity.Application",
+        "description": "Cookie de autenticacion de ASP.NET Identity. Se obtiene via POST /api/login?useCookies=true con un usuario que tenga el rol Admin."
+      }
+    }
+  }
+}
