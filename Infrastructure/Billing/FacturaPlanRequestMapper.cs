@@ -13,21 +13,22 @@ public class FacturaPlanRequestMapper
             Email: request.Customer.Email,
             Address: request.Customer.Address);
 
-        var items = request.Items.Select(line =>
-        {
-            var tax = line.UnitPrice * line.Quantity * settings.TaxRate;
-            return new FacturaPlanItem(
-                Quantity: line.Quantity,
-                Code: line.Code,
-                Description: line.Description,
-                UnitPrice: line.UnitPrice,
-                TaxType: "IVA_RATE",
-                Tax: tax);
-        }).ToList();
+        // settings.TaxRate is a percentage (e.g. 15 = 15%). Send it verbatim in items[].tax
+        // and divide by 100 only when computing the gross total.
+        var items = request.Items.Select(line => new FacturaPlanItem(
+            Quantity: line.Quantity,
+            Code: line.Code,
+            Description: line.Description,
+            UnitPrice: line.UnitPrice,
+            TaxType: "IVA_RATE",
+            Tax: settings.TaxRate)).ToList();
+
+        var subtotal = items.Sum(i => i.UnitPrice * i.Quantity);
+        var computedTotal = decimal.Round(subtotal * (1m + settings.TaxRate / 100m), 2, MidpointRounding.AwayFromZero);
 
         var payments = new List<FacturaPlanPayment>
         {
-            new(Method: settings.DefaultPaymentMethod, Amount: request.Payment.Amount)
+            new(Method: settings.DefaultPaymentMethod, Amount: computedTotal)
         };
 
         return new FacturaPlanInvoiceRequest(
@@ -35,7 +36,6 @@ public class FacturaPlanRequestMapper
             Items: items,
             Payments: payments,
             Establishment: settings.Establishment,
-            EmissionPoint: settings.EmissionPoint,
-            SendEmail: true);
+            EmissionPoint: settings.EmissionPoint);
     }
 }

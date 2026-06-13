@@ -417,6 +417,11 @@ namespace Persistence.Migrations.WriteMigrations
                     b.Property<bool>("IsActive")
                         .HasColumnType("boolean");
 
+                    b.Property<bool>("IsDefault")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
                     b.Property<string>("Key")
                         .IsRequired()
                         .HasMaxLength(100)

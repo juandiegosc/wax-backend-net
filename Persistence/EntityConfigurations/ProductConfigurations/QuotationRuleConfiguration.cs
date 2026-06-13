@@ -16,6 +16,7 @@ public class QuotationRuleConfiguration : IEntityTypeConfiguration<QuotationRule
 
         builder.Property(p => p.Value).HasPrecision(18, 4);
         builder.Property(p => p.Description).HasMaxLength(500);
+        builder.Property(p => p.IsDefault).IsRequired().HasDefaultValue(false);
 
         builder.Ignore(p => p.DomainEvents);
     }

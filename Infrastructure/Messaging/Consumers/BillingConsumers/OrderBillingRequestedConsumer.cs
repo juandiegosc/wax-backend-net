@@ -32,23 +32,13 @@ public class OrderBillingRequestedConsumer(
                 new[] { evt.BillingLine1, evt.BillingLine2, evt.BillingCity, evt.BillingState, evt.BillingCountry }
                     .Where(s => !string.IsNullOrWhiteSpace(s))).Trim()
             : null;
-
+        
         var lines = orderItems.Select(item => new InvoiceLine(
             Code: item.ProductId,
             Description: item.Name,
             Quantity: item.Quantity,
             UnitPrice: item.Price / 100m,
             Tax: 0m)).ToList<InvoiceLine>();
-
-        if (evt.DeliveryFee > 0)
-        {
-            lines.Add(new InvoiceLine(
-                Code: "DELIVERY",
-                Description: "Delivery Fee",
-                Quantity: 1,
-                UnitPrice: evt.DeliveryFee / 100m,
-                Tax: 0m));
-        }
 
         var request = new InvoiceRequest(
             OrderId: evt.OrderId,

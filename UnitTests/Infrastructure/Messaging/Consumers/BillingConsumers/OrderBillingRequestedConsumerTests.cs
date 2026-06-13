@@ -187,6 +187,26 @@ public class OrderBillingRequestedConsumerTests
     }
 
     [Fact]
+    public async Task Consume_DoesNotAddDeliveryLine_BecauseDeliveryFeeRepresentsIva()
+    {
+        InvoiceRequest? capturedRequest = null;
+        _facade
+            .Setup(f => f.EmitInvoiceAsync(It.IsAny<InvoiceRequest>(), It.IsAny<CancellationToken>()))
+            .Callback<InvoiceRequest, CancellationToken>((req, _) => capturedRequest = req)
+            .ReturnsAsync(new InvoiceEmissionResult(true, "INV-001", null, null, null, null));
+
+        var consumer = BuildConsumer();
+        // DeliveryFee > 0 but should NOT become a line item — it represents IVA and
+        // FacturaPlan recomputes IVA from product subtotals.
+        var evt = CreateEvent(deliveryFee: 1500L);
+        var context = CreateContext(evt);
+
+        await consumer.Consume(context.Object);
+
+        capturedRequest!.Items.Should().NotContain(i => i.Code == "DELIVERY");
+    }
+
+    [Fact]
     public async Task Consume_LogsExternalInvoiceId_OnSuccess()
     {
         var loggerMock = new Mock<ILogger<OrderBillingRequestedConsumer>>();

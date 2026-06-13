@@ -5,8 +5,7 @@ internal sealed record FacturaPlanInvoiceRequest(
     IReadOnlyList<FacturaPlanItem> Items,
     IReadOnlyList<FacturaPlanPayment> Payments,
     string Establishment,
-    string EmissionPoint,
-    bool SendEmail);
+    string EmissionPoint);
 
 internal sealed record FacturaPlanCustomer(
     string IdentificationType,
