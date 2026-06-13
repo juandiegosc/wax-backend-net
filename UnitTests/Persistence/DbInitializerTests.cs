@@ -31,17 +31,31 @@ public class DbInitializerTests
 
     private DbInitializer CreateInitializer()
     {
+        return CreateInitializerWithContext().initializer;
+    }
+
+    private (DbInitializer initializer, WriteDbContext context) CreateInitializerWithContext()
+    {
         var options = new DbContextOptionsBuilder<WriteDbContext>()
             .UseInMemoryDatabase(databaseName: Guid.NewGuid().ToString())
             .Options;
         var context = new WriteDbContext(options);
 
-        return new DbInitializer(
+        var initializer = new DbInitializer(
             _userManager.Object,
             _roleManager.Object,
             _configuration.Object,
             context,
             _logger.Object);
+
+        return (initializer, context);
+    }
+
+    private void SetupSkipAdminAndRoles()
+    {
+        _roleManager.Setup(r => r.RoleExistsAsync(It.IsAny<string>())).ReturnsAsync(true);
+        _configuration.Setup(c => c["Admin:Email"]).Returns((string?)null);
+        _configuration.Setup(c => c["Admin:Password"]).Returns((string?)null);
     }
 
     [Fact]
@@ -158,5 +172,57 @@ public class DbInitializerTests
                 It.IsAny<Exception?>(),
                 It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
             Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_WhenQuotationRulesTableEmpty_SeedsFourDefaultRules()
+    {
+        SetupSkipAdminAndRoles();
+        var (initializer, context) = CreateInitializerWithContext();
+
+        await initializer.InitializeAsync();
+
+        var rules = await context.QuotationRules.ToListAsync();
+        rules.Should().HaveCount(4);
+        rules.Should().OnlyContain(r => r.IsDefault);
+        rules.Select(r => r.Key).Should().BeEquivalentTo(
+            "BASE_COST", "MARGIN_MULTIPLIER", "DEFAULT_DEPTH_CM", "MATERIAL_default");
+    }
+
+    [Fact]
+    public async Task InitializeAsync_WhenSeedRulesExistWithoutIsDefault_BackfillsThem()
+    {
+        SetupSkipAdminAndRoles();
+        var (initializer, context) = CreateInitializerWithContext();
+        context.QuotationRules.AddRange(
+            new global::Domain.ProductAggregate.QuotationRule { Key = "BASE_COST", Value = 5000m },
+            new global::Domain.ProductAggregate.QuotationRule { Key = "MARGIN_MULTIPLIER", Value = 1.6m },
+            new global::Domain.ProductAggregate.QuotationRule { Key = "USER_RULE", Value = 10m });
+        await context.SaveChangesAsync();
+
+        await initializer.InitializeAsync();
+
+        var rules = await context.QuotationRules.ToListAsync();
+        rules.Should().HaveCount(3);
+        rules.Single(r => r.Key == "BASE_COST").IsDefault.Should().BeTrue();
+        rules.Single(r => r.Key == "MARGIN_MULTIPLIER").IsDefault.Should().BeTrue();
+        rules.Single(r => r.Key == "USER_RULE").IsDefault.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task InitializeAsync_WhenSeedRulesAlreadyDefault_NoChanges()
+    {
+        SetupSkipAdminAndRoles();
+        var (initializer, context) = CreateInitializerWithContext();
+        var existing = new global::Domain.ProductAggregate.QuotationRule { Key = "BASE_COST", Value = 5000m };
+        existing.MarkAsDefault();
+        context.QuotationRules.Add(existing);
+        await context.SaveChangesAsync();
+
+        await initializer.InitializeAsync();
+
+        var rules = await context.QuotationRules.ToListAsync();
+        rules.Should().HaveCount(1);
+        rules[0].IsDefault.Should().BeTrue();
     }
 }
